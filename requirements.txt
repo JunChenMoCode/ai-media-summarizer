@@ -1,0 +1,6 @@
+faster-whisper
+openai
+opencv-python
+ffmpeg-python
+python-dotenv
+imageio-ffmpeg
