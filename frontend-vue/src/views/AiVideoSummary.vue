@@ -122,6 +122,7 @@
             <template #icon><icon-arrow-left /></template>
             Back to Home
           </a-button>
+          <div class="summary-header-title" :title="currentContentTitle">{{ currentContentTitle }}</div>
         </div>
         <a-tabs v-model:active-key="activeRightTab" type="line" size="medium" :animation="true" class="summary-tabs">
           <!-- Tab 1: Transcript -->
@@ -637,6 +638,20 @@ const activeSegment = computed(() => {
     }
   }
   return current
+})
+
+const currentContentTitle = computed(() => {
+  const analysisTitle = String(analysisData.value?.title || '').trim()
+  const segTitle = String(activeSegment.value?.title || '').trim()
+  if (analysisTitle && segTitle && segTitle !== analysisTitle) return `${analysisTitle} · ${segTitle}`
+  if (analysisTitle) return analysisTitle
+  const localName = String(videoFile.value?.name || '').trim()
+  if (localName) return localName
+  const path = String(videoPath.value || '').trim()
+  if (path) return path
+  const url = String(videoUrlInput.value || videoUrl.value || '').trim()
+  if (url) return url
+  return '未加载内容'
 })
 
 const formattedTranscriptParagraphs = computed(() => {
@@ -1344,6 +1359,46 @@ const handleSubmit = async () => {
 
 .back-btn {
   color: var(--text-sub);
+}
+
+.summary-header-title {
+  margin-left: auto;
+  max-width: 70%;
+  min-width: 0;
+  color: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  letter-spacing: 0.2px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.90) 18%,
+    rgba(130, 170, 255, 0.95) 36%,
+    rgba(255, 170, 210, 0.92) 52%,
+    rgba(255, 224, 160, 0.92) 68%,
+    rgba(255, 255, 255, 0.82) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 0 10px rgba(130, 170, 255, 0.10));
+  animation: headerTitleShimmer 6s ease-in-out infinite;
+}
+
+@keyframes headerTitleShimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-header-title {
+    animation: none;
+  }
 }
 
 .summary-content {

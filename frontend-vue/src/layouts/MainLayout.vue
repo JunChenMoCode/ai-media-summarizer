@@ -193,6 +193,31 @@ watchEffect(() => {
   border-radius: 999px;
 }
 
+.nav-section::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(168, 116, 255, 0.62) 22%,
+    rgba(255, 116, 232, 0.52) 50%,
+    rgba(206, 136, 255, 0.44) 78%,
+    transparent 100%
+  );
+  background-size: 100% 220%;
+  background-position: 0% 0%;
+  filter: blur(0.2px);
+  opacity: 0.9;
+  animation: siderLineFlow 4.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .nav-item {
   width: 48px;
   height: 48px;
@@ -202,21 +227,97 @@ watchEffect(() => {
   justify-content: center;
   cursor: pointer;
   color: var(--sider-icon);
-  transition: all 0.2s ease;
+  transition: transform 0.18s ease, color 0.18s ease, background-color 0.18s ease, filter 0.18s ease;
   flex-shrink: 0;
   position: relative;
   z-index: 1;
+  transform: translateZ(0);
+}
+
+.nav-item::before {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 18px;
+  background:
+    radial-gradient(18px 18px at 28% 22%, rgba(255, 255, 255, 0.28), transparent 70%),
+    radial-gradient(22px 22px at 72% 68%, rgba(255, 255, 255, 0.20), transparent 70%),
+    radial-gradient(20px 20px at 54% 86%, rgba(255, 255, 255, 0.14), transparent 70%);
+  opacity: 0;
+  filter: blur(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.nav-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.00) 0%,
+    rgba(255, 255, 255, 0.16) 22%,
+    rgba(255, 255, 255, 0.10) 52%,
+    rgba(255, 255, 255, 0.08) 78%,
+    rgba(255, 255, 255, 0.00) 100%
+  );
 }
 
 .nav-item:hover {
   background-color: var(--sider-hover-bg);
   color: var(--sider-hover-color);
+  transform: translateY(-1px) scale(1.03);
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.25));
+}
+
+.nav-item:hover::before {
+  opacity: 1;
+  transform: scale(1.02);
+}
+
+.nav-item:hover::after {
+  opacity: 1;
 }
 
 .nav-item.active {
   background-color: var(--sider-active-bg);
   color: var(--sider-active-color);
   box-shadow: none;
+}
+
+.nav-item.active::before {
+  opacity: 1;
+  filter: blur(7px);
+  background:
+    radial-gradient(18px 18px at 28% 22%, rgba(255, 255, 255, 0.28), transparent 70%),
+    radial-gradient(22px 22px at 72% 68%, rgba(255, 255, 255, 0.20), transparent 70%),
+    radial-gradient(20px 20px at 54% 86%, rgba(255, 255, 255, 0.14), transparent 70%);
+}
+
+.nav-item.active::after {
+  opacity: 1;
+  animation: navActiveSheen 2.8s ease-in-out infinite;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.00) 0%,
+    rgba(255, 255, 255, 0.16) 22%,
+    rgba(255, 255, 255, 0.10) 52%,
+    rgba(255, 255, 255, 0.08) 78%,
+    rgba(255, 255, 255, 0.00) 100%
+  );
+}
+
+.nav-item.active > :deep(svg),
+.nav-item.active > :deep(i) {
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.18));
+}
+
+.nav-item:active {
+  transform: translateY(0px) scale(0.99);
 }
 
 .sider-footer {
@@ -252,5 +353,34 @@ watchEffect(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+@keyframes siderLineFlow {
+  0% { background-position: 0% 0%; opacity: 0.70; }
+  50% { background-position: 0% 100%; opacity: 0.95; }
+  100% { background-position: 0% 0%; opacity: 0.70; }
+}
+
+@keyframes navActiveSheen {
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-section::after,
+  .nav-item.active::after {
+    animation: none;
+  }
+
+  .nav-item {
+    transition: color 0.18s ease, background-color 0.18s ease;
+  }
+
+  .nav-item:hover,
+  .nav-item:active {
+    transform: none;
+    filter: none;
+  }
 }
 </style>
