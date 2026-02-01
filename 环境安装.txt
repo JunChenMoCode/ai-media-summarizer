@@ -1,0 +1,15 @@
+安装minio
+docker pull registry.cn-hangzhou.aliyuncs.com/farerboy/minio
+docker rm -f leader-minio
+docker run -d --name leader-minio --restart unless-stopped `
+  -p 9000:9000 -p 9001:9001 `
+  -v E:\miniio:/data `
+  -e MINIO_ROOT_USER=minioadmin `
+  -e MINIO_ROOT_PASSWORD=minioadmin `
+  registry.cn-hangzhou.aliyuncs.com/farerboy/minio server /data --console-address ":9001"
+配置
+MINIO_ENDPOINT=127.0.0.1:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=leader
+MINIO_SECURE=false

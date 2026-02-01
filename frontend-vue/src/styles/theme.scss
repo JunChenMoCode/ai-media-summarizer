@@ -1,0 +1,177 @@
+$theme-light: (
+  primary-color: #000000,
+  primary-hover: #333333,
+  bg-color: #ffffff,
+  text-strong: #000000,
+  text-main: #1a1a1a,
+  text-sub: #666666,
+  text-muted: #a0aec0,
+  card-radius: 32px,
+  surface-0: #ffffff,
+  surface-1: #f7f8fa,
+  surface-2: rgba(255, 255, 255, 0.9),
+  surface-3: rgba(255, 255, 255, 0.8),
+  card-border: rgba(238, 238, 238, 0.5),
+  card-border-strong: rgba(0, 0, 0, 0.1),
+  shadow-1: 0 4px 20px rgba(0, 0, 0, 0.03),
+  shadow-2: 0 2px 8px rgba(0, 0, 0, 0.02),
+  hover-bg: rgba(0, 0, 0, 0.05),
+  hover-border: #000000,
+  video-placeholder-hover-bg: #ffffff,
+  card-text: #2d3748,
+  card-text-muted: #4a5568,
+  analysis-bg: rgba(245, 245, 245, 0.7),
+  overview-bg: rgba(0, 0, 0, 0.85),
+  overview-overlay: rgba(255, 255, 255, 0.1),
+  overview-overlay-strong: rgba(255, 255, 255, 0.2),
+  overview-border: rgba(255, 255, 255, 0.3),
+  media-bg: #000000,
+  overlay-bg: rgba(0, 0, 0, 0.7),
+  badge-bg: rgba(0, 0, 0, 0.7),
+  on-dark: #ffffff,
+  on-dark-muted: rgba(255, 255, 255, 0.8),
+  accent-1: #4b4b9b,
+  accent-2: #ff6b81,
+  accent-1-bg: #f0f0ff,
+  accent-warn: #ffb400,
+  danger: #ef4444,
+  success: #48bb78,
+  input-bg: #f7fafc,
+  input-border: #edf2f7,
+  input-hover-bg: #edf2f7,
+  input-hover-border: #cbd5e0,
+  input-focus-bg: #ffffff,
+  input-focus-shadow: 0 0 0 3px rgba(0, 0, 0, 0.1),
+  sider-bg: #000000,
+  sider-icon: rgba(255, 255, 255, 0.7),
+  sider-hover-bg: rgba(255, 255, 255, 0.1),
+  sider-hover-color: #ffffff,
+  sider-active-bg: #ffffff,
+  sider-active-color: #000000,
+  sider-muted: rgba(255, 255, 255, 0.5),
+  sider-line-bg: rgba(255, 255, 255, 0.18)
+);
+
+$theme-dark: (
+  primary-color: #ffffff,
+  primary-hover: #e5e7eb,
+  bg-color: #0f1115,
+  text-strong: #f9fafb,
+  text-main: #e5e7eb,
+  text-sub: #9aa4b2,
+  text-muted: #7b8794,
+  card-radius: 32px,
+  surface-0: #141820,
+  surface-1: #0f1318,
+  surface-2: rgba(20, 24, 32, 0.92),
+  surface-3: rgba(20, 24, 32, 0.8),
+  card-border: rgba(255, 255, 255, 0.08),
+  card-border-strong: rgba(255, 255, 255, 0.18),
+  shadow-1: 0 4px 20px rgba(0, 0, 0, 0.35),
+  shadow-2: 0 2px 8px rgba(0, 0, 0, 0.25),
+  hover-bg: rgba(255, 255, 255, 0.08),
+  hover-border: #ffffff,
+  video-placeholder-hover-bg: rgba(255, 255, 255, 0.08),
+  card-text: #e5e7eb,
+  card-text-muted: #b0bac7,
+  analysis-bg: rgba(15, 17, 21, 0.8),
+  overview-bg: #0f1318,
+  overview-overlay: rgba(255, 255, 255, 0.08),
+  overview-overlay-strong: rgba(255, 255, 255, 0.16),
+  overview-border: rgba(255, 255, 255, 0.2),
+  media-bg: #000000,
+  overlay-bg: rgba(0, 0, 0, 0.7),
+  badge-bg: rgba(0, 0, 0, 0.7),
+  on-dark: #ffffff,
+  on-dark-muted: rgba(255, 255, 255, 0.7),
+  accent-1: #8b8fff,
+  accent-2: #ff8fa1,
+  accent-1-bg: rgba(139, 143, 255, 0.12),
+  accent-warn: #ffc857,
+  danger: #f87171,
+  success: #34d399,
+  input-bg: #151a20,
+  input-border: rgba(255, 255, 255, 0.12),
+  input-hover-bg: #1a2027,
+  input-hover-border: rgba(255, 255, 255, 0.24),
+  input-focus-bg: #141820,
+  input-focus-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12),
+  sider-bg: #151a20,
+  sider-icon: rgba(255, 255, 255, 0.8),
+  sider-hover-bg: rgba(255, 255, 255, 0.08),
+  sider-hover-color: #ffffff,
+  sider-active-bg: #2a313b,
+  sider-active-color: #ffffff,
+  sider-muted: rgba(255, 255, 255, 0.6),
+  sider-line-bg: rgba(255, 255, 255, 0.14)
+);
+
+@mixin theme-vars($map) {
+  @each $key, $value in $map {
+    --#{$key}: #{$value};
+  }
+}
+
+:root {
+  @include theme-vars($theme-light);
+}
+
+:root[data-theme='dark'],
+body[arco-theme='dark'] {
+  @include theme-vars($theme-dark);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+  color: var(--text-main);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  width: 100%;
+  height: 100vh;
+}
+
+.arco-btn-primary {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.arco-btn-primary:hover {
+  background-color: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.arco-input-focus,
+.arco-select-view-focus,
+.arco-textarea-focus {
+  border-color: var(--primary-color) !important;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1) !important;
+}
+
+.markdown-body {
+  font-family: inherit;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  font-weight: 800;
+}
+
+.markdown-body p {
+  margin-bottom: 16px;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 16px;
+  margin: 16px 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
