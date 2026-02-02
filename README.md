@@ -1,60 +1,153 @@
-# High-Performance Video Summary (极致性能视频总结)
+# Leader：高性能视频总结（Web 版）
 
-这是一个基于“内容驱动”逻辑的高性能视频总结工具。它通过直接提取音频流、优化 ASR 参数、AI 逻辑分段以及并行截图，实现了极快的处理速度。
+这是一个“音频直提 + ASR 加速 + LLM 分段 + 按需并行截图”的视频总结工具，提供 **FastAPI 后端** + **Vue3 前端** 的交互式 Web 界面，支持：
 
-## 核心优化点
+- 上传本地视频（直传 MinIO）或粘贴 URL 导入（yt-dlp）
+- 一键生成摘要/图文详解、思维导图、文稿笔记
+- 双语字幕翻译与双字幕展示
+- 课件截图与 OCR（支持 VL 模型远程 OCR 或本地 Tesseract）
 
-1.  **音频提取 (0 编码耗时)**: 使用 FFmpeg `Stream Copy` 模式，直接抽取音频轨道，不经过编解码。
-2.  **ASR 提速**:
-    *   使用 `faster-whisper` + GPU 加速。
-    *   开启 VAD (语音活动检测) 自动跳过静音。
-    *   设置 `beam_size=1` (贪婪解码) 提升 2 倍速度。
-3.  **流程优化**:
-    *   **文本先行**: 先通过 ASR 和 LLM 确定关键分段。
-    *   **按需截图**: 仅对 LLM 建议的关键时间点进行截图。
-    *   **并行 IO**: 使用多线程并发进行视频抽帧和写入。
+## 架构概览
 
-## 快速开始
+- 后端入口：`main.py`（uvicorn 入口尽量保持精简）
+- 后端实现：`leader_api/`（按职责拆分）
+  - `leader_api/app.py`：应用创建与路由注册
+  - `leader_api/minio_store.py`：MinIO 访问封装
+  - `leader_api/minio_routes.py`：直传 MinIO 的 presign 接口
+  - `leader_api/video.py`：URL 导入视频（yt-dlp）
+  - `leader_api/analyze.py`：视频分析（流式输出进度）
+  - `leader_api/capture.py`：按时间点截图
+  - `leader_api/ocr.py`：Tesseract/VL OCR
+  - `leader_api/translate_routes.py`：字幕翻译
+  - `leader_api/llm_routes.py`：聊天/思维导图/笔记
+- 前端：`frontend-vue/`（Vite + Vue3 + Arco）
 
-### 1. 安装依赖
+## 存储策略（重要）
 
-确保你的系统中已安装 [FFmpeg](https://ffmpeg.org/)。
+本项目默认 **MinIO Only**：
 
-然后安装 Python 依赖：
+- 视频文件：上传到 `uploads/<job_id>/...`
+- 分析产物：上传到 `outputs/<job_id>/...`（markdown + 图片等）
+- 服务端分析时只使用临时目录写入中间产物，结束后统一上传到 MinIO，不依赖本地 `fast_output/`、`web_uploads/` 等持久目录
+
+## 运行依赖
+
+- Python（建议 3.10+）
+- Node.js（用于前端，建议 18+）
+- FFmpeg（用于音频抽取/视频处理）
+- MinIO（必须，用于视频与产物存储）
+- 可选：Tesseract OCR（仅当选择 “Tesseract (Local)” 作为 OCR 引擎）
+
+## 快速开始（本地开发）
+
+### 1) 安装 Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境
+### 2) 配置 .env
 
-复制 `.env.example` 为 `.env` 并填写你的配置：
+复制 `.env.example` 为 `.env`，然后按需修改（不要把真实 key 提交到仓库）：
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env`：
-*   `OPENAI_API_KEY`: 你的硅基流动 API Key。
-*   `OPENAI_BASE_URL`: 硅基流动 API 基础路径 (默认为 `https://api.siliconflow.cn/v1`)。
-*   `LLM_MODEL`: 使用的模型名称 (默认为 `deepseek-ai/DeepSeek-V3`)。
-*   `VIDEO_PATH`: 待处理的视频路径 (默认 `input.mp4`)。
-
-### 3. 运行
-
-将你的视频文件命名为 `input.mp4` (或在 `.env` 中指定路径)，然后运行：
+常用环境变量（按需配置）：
 
 ```bash
-python fast_video_summary.py
+# LLM / 供应商
+OPENAI_API_KEY=你的Key
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+LLM_MODEL=deepseek-ai/DeepSeek-V3
+
+# MinIO（必填）
+MINIO_ENDPOINT=127.0.0.1:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=leader
+MINIO_SECURE=false
+
+# 可选：如果前端不是跑在同一台机器/容器里，或者浏览器访问 MinIO 的地址与后端不同
+# 配它可以让生成的视频/图片 URL 更容易被浏览器直连访问
+MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000
+
+# 可选：yt-dlp 代理（YouTube 常用）
+YTDLP_PROXY=http://127.0.0.1:7897
 ```
 
-### 4. 查看结果
+### 3) 启动 MinIO
 
-处理完成后，结果将保存在 `fast_output` 目录下：
-*   `final_report.md`: 最终的 Markdown 分析报告。
-*   `images/`: 抽取的关键帧图片。
+二选一：
 
-## 注意事项
+**方式 A：本地二进制**
 
-*   **GPU 加速**: 默认配置使用 `cuda`。如果没有 NVIDIA GPU 或未配置好 CUDA 环境，脚本会自动回退到 `cpu` 模式 (速度会变慢)。
-*   **模型大小**: 默认使用 `medium` 模型。如果显存不足，可以在 `.env` 中改为 `small`；如果追求更高精度，可以改为 `large-v3`。
+```bash
+.\minio.exe server E:\miniio --console-address ":9001"
+```
+
+**方式 B：Docker**
+
+```bash
+docker run -d --name leader-minio --restart unless-stopped ^
+  -p 9000:9000 -p 9001:9001 ^
+  -v E:\miniio:/data ^
+  -e MINIO_ROOT_USER=minioadmin ^
+  -e MINIO_ROOT_PASSWORD=minioadmin ^
+  minio/minio server /data --console-address ":9001"
+```
+
+MinIO 控制台默认：`http://127.0.0.1:9001`
+
+### 4) 启动后端（FastAPI）
+
+```bash
+python -m uvicorn main:app --host 0.0.0.0 --port 18000
+```
+
+### 5) 启动前端（Vue3）
+
+```bash
+cd frontend-vue
+npm install
+npm run dev
+```
+
+打开前端后，在 Settings 中确认 `BACKEND URL`（默认 `http://localhost:18000`）。
+
+## OCR 引擎选择
+
+前端 Settings 支持选择 OCR 引擎：
+
+- `VL Model (Remote)`：走远程视觉语言模型（需要可用的 API Key / Base URL）
+- `Tesseract (Local)`：走本机 tesseract CLI（无需远程 API）
+
+### 使用本地 Tesseract
+
+1) 安装 Tesseract 并加入 PATH（Windows 常见路径：`C:\Program Files\Tesseract-OCR`）  
+2) tessdata 目录：
+   - 优先读取环境变量 `TESSDATA_PREFIX`
+   - 未设置时默认使用 `<项目根目录>/model/tessdata`
+3) 默认识别语言：`chi_sim+eng`，可用 `TESSERACT_LANG` 覆盖
+
+## 常见问题排查
+
+### 1) 分析完视频后播放器灰屏、0:00 播不了
+
+通常是视频 `src` 被覆盖成了不可访问的 URL（例如 MinIO 地址/跨域/网络不可达）。项目已经避免在“本地上传（blob:）模式”下把 `src` 覆盖为 MinIO URL，但如果你是 URL 导入或跨机器访问，请确保：
+
+- `MINIO_ENDPOINT` 或 `MINIO_PUBLIC_BASE_URL` 对浏览器可达
+- MinIO 9000 端口未被防火墙拦截
+
+### 2) YouTube 导入失败
+
+YouTube 在部分网络环境需要代理，可在 `.env` 中配置：
+
+```bash
+YTDLP_PROXY=http://127.0.0.1:7897
+```
+
+### 3) Tesseract 报 “缺少 chi_sim”
+
+确保 `model/tessdata`（或 `TESSDATA_PREFIX` 指向目录）里存在对应的 `chi_sim.traineddata`/`eng.traineddata`。

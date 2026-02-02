@@ -249,6 +249,7 @@ const progressPercent = ref(0)
   const analysisData = ref(null)
 const videoUrl = ref('')
 const videoFile = ref(null)
+const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
 
 // Welcome Page States
 const showWelcome = ref(true)
@@ -349,6 +350,58 @@ const handleFileChange = (_, fileItem) => {
   Message.success(`Selected: ${fileItem.file.name}`)
 }
 
+const readSseResponse = async (response) => {
+  if (!response.body) throw new Error('ReadableStream not supported')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const data = JSON.parse(line)
+        if (data.status === 'progress') {
+          progressMsg.value = data.message
+
+          if (data.message.includes('视频加载成功')) progressPercent.value = 5
+          else if (data.message.includes('快速抽取音频流')) progressPercent.value = 10
+          else if (data.message.includes('音频提取')) progressPercent.value = 15
+          else if (data.message.includes('加载 Whisper 模型')) progressPercent.value = 20
+          else if (data.message.includes('正在进行 ASR 加速转录')) progressPercent.value = 30
+          else if (data.message.includes('转录完成')) progressPercent.value = 50
+          else if (data.message.includes('ASR 转录')) progressPercent.value = 55
+          else if (data.message.includes('发送给 LLM')) progressPercent.value = 60
+          else if (data.message.includes('LLM 分析')) progressPercent.value = 75
+          else if (data.message.includes('并行截取')) progressPercent.value = 80
+          else if (data.message.includes('并行截图')) progressPercent.value = 85
+          else if (data.message.includes('生成最终 Markdown')) progressPercent.value = 90
+        } else if (data.status === 'success') {
+          report.value = data.report
+          analysisData.value = data.data
+          videoUrl.value = data.video_url
+
+          progressMsg.value = 'Analysis completed!'
+          progressPercent.value = 100
+          Message.success('Analysis completed!')
+        } else if (data.status === 'error') {
+          throw new Error(data.message)
+        }
+      } catch (e) {
+        console.error('Error parsing line:', line, e)
+      }
+    }
+  }
+}
+
 const handleSubmit = async () => {
   if (!videoFile.value) return
   
@@ -359,12 +412,9 @@ const handleSubmit = async () => {
 
   loading.value = true
   progressPercent.value = 0
-  progressMsg.value = 'Preparing upload...'
+  progressMsg.value = '请求上传地址...'
   report.value = ''
   analysisData.value = null
-  
-  const formData = new FormData()
-  formData.append('video', videoFile.value)
   
   const config = {
     openai_api_key: configStore.openai_api_key,
@@ -375,65 +425,57 @@ const handleSubmit = async () => {
     compute_type: configStore.compute_type,
     capture_offset: configStore.capture_offset,
   }
-  formData.append('config_json', JSON.stringify(config))
 
   try {
-    const response = await fetch('http://localhost:8000/analyze', {
+    const presignRes = await fetch(`${backendBaseUrl.value}/minio/presign_upload`, {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: videoFile.value.name,
+        content_type: videoFile.value.type || 'application/octet-stream',
+      }),
     })
 
-    if (!response.body) throw new Error('ReadableStream not supported')
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    
-    let buffer = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const data = JSON.parse(line)
-          if (data.status === 'progress') {
-            progressMsg.value = data.message
-            
-            // Map progress message to percentage
-            if (data.message.includes('视频上传成功')) progressPercent.value = 5
-            else if (data.message.includes('快速抽取音频流')) progressPercent.value = 10
-            else if (data.message.includes('音频提取')) progressPercent.value = 15
-            else if (data.message.includes('加载 Whisper 模型')) progressPercent.value = 20
-            else if (data.message.includes('正在进行 ASR 加速转录')) progressPercent.value = 30
-            else if (data.message.includes('转录完成')) progressPercent.value = 50
-            else if (data.message.includes('ASR 转录')) progressPercent.value = 55
-            else if (data.message.includes('发送给 LLM')) progressPercent.value = 60
-            else if (data.message.includes('LLM 分析')) progressPercent.value = 75
-            else if (data.message.includes('并行截取')) progressPercent.value = 80
-            else if (data.message.includes('并行截图')) progressPercent.value = 85
-            else if (data.message.includes('生成最终 Markdown')) progressPercent.value = 90
-            
-          } else if (data.status === 'success') {
-            report.value = data.report
-            analysisData.value = data.data
-            videoUrl.value = data.video_url
-            
-            progressMsg.value = 'Analysis completed!'
-            progressPercent.value = 100
-            Message.success('Analysis completed!')
-          } else if (data.status === 'error') {
-            throw new Error(data.message)
-          }
-        } catch (e) {
-          console.error('Error parsing line:', line, e)
-        }
-      }
+    if (!presignRes.ok) {
+      const err = await presignRes.json().catch(() => null)
+      throw new Error(err?.detail || '获取 MinIO 上传地址失败')
     }
+    const presign = await presignRes.json()
+
+    if (presign.video_url) videoUrl.value = presign.video_url
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', presign.upload_url, true)
+      try {
+        xhr.setRequestHeader('Content-Type', videoFile.value.type || 'application/octet-stream')
+      } catch (e) {}
+
+      xhr.upload.onprogress = (evt) => {
+        if (!evt.lengthComputable) return
+        const pct = Math.round((evt.loaded / evt.total) * 95)
+        progressPercent.value = Math.max(progressPercent.value, Math.min(95, pct))
+        progressMsg.value = `Uploading: ${progressPercent.value}%`
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve()
+        else reject(new Error(`上传失败: ${xhr.status}`))
+      }
+      xhr.onerror = () => reject(new Error('上传失败: 网络错误'))
+
+      xhr.send(videoFile.value)
+    })
+
+    progressMsg.value = 'Preparing analysis...'
+    progressPercent.value = Math.max(progressPercent.value, 95)
+
+    const response = await fetch(`${backendBaseUrl.value}/analyze_path`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_path: presign.object_key, config }),
+    })
+    await readSseResponse(response)
   } catch (error) {
     Message.error(error.message || 'Unknown error during analysis')
     progressMsg.value = 'Error: ' + (error.message || 'Unknown error')

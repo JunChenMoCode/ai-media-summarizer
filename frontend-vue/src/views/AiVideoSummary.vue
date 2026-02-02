@@ -49,7 +49,16 @@
         </div>
 
         <div v-if="videoUrl" class="subtitle-bar">
-          <span class="subtitle-text">{{ subtitleLine }}</span>
+          <div class="subtitle-lines">
+            <div
+              v-for="(line, idx) in subtitleLines"
+              :key="idx"
+              class="subtitle-text"
+              :class="idx === 0 ? 'subtitle-text-cn' : 'subtitle-text-en'"
+            >
+              {{ line }}
+            </div>
+          </div>
         </div>
         
         <div class="video-actions-bar">
@@ -383,6 +392,13 @@ import {
 
 const router = useRouter()
 const configStore = useConfigStore()
+const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
+const backendWsBaseUrl = computed(() => {
+  const base = backendBaseUrl.value
+  if (base.startsWith('https://')) return base.replace(/^https:/, 'wss:')
+  if (base.startsWith('http://')) return base.replace(/^http:/, 'ws:')
+  return base
+})
 
 // State
 const videoRef = ref(null)
@@ -455,19 +471,8 @@ const handleCoursewareOcr = async () => {
 
   coursewareOcrLoading.value = true
   try {
-    const config = {
-      openai_api_key: configStore.openai_api_key,
-      openai_base_url: configStore.openai_base_url,
-      llm_model: configStore.llm_model,
-      vl_model: configStore.vl_model,
-      vl_base_url: configStore.vl_base_url,
-      vl_api_key: configStore.vl_api_key,
-      model_size: configStore.model_size,
-      device: configStore.device,
-      compute_type: configStore.compute_type,
-      capture_offset: configStore.capture_offset,
-    }
-    const response = await fetch('http://localhost:8000/ocr_courseware', {
+    const config = buildConfig()
+    const response = await fetch(`${backendBaseUrl.value}/ocr_courseware`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: selectedItems, config: config }),
@@ -504,7 +509,7 @@ const handleGenerateNotes = async () => {
       const fullTranscript = transcriptData.value.map(t => t.text).join('\n');
       const config = buildConfig();
 
-      const response = await fetch('http://localhost:8000/generate_notes', {
+      const response = await fetch(`${backendBaseUrl.value}/generate_notes`, {
           method: 'POST',
           headers: {
               'Content-Type': 'application/json'
@@ -583,7 +588,7 @@ const handleGenerateMindmap = async () => {
       const fullTranscript = transcriptData.value.map(t => t.text).join('\n');
       const config = buildConfig();
 
-      const response = await fetch('http://localhost:8000/generate_mindmap', {
+      const response = await fetch(`${backendBaseUrl.value}/generate_mindmap`, {
           method: 'POST',
           headers: {
               'Content-Type': 'application/json'
@@ -730,14 +735,13 @@ const currentSubtitleEn = computed(() => {
 })
 
 
-const subtitleLine = computed(() => {
-  if (!bilingualEnabled.value) return currentSubtitle.value || '暂无字幕'
-  const cn = currentSubtitle.value
-  const en = currentSubtitleEn.value
-  if (!cn && !en) return '暂无字幕'
-  if (!en) return cn || '暂无字幕'
-  if (!cn) return en
-  return `${cn}  |  ${en}`
+const subtitleLines = computed(() => {
+  const cn = String(currentSubtitle.value || '').trim()
+  const en = String(currentSubtitleEn.value || '').trim()
+  if (!bilingualEnabled.value) return [cn || '暂无字幕']
+  if (!cn && !en) return ['暂无字幕']
+  if (cn && en) return [cn, en]
+  return [cn || en]
 })
 
 // Methods
@@ -792,7 +796,7 @@ const handleUrlSubmit = () => {
   if (!videoUrlInput.value) return
 
   importingVideo.value = true
-  fetch('http://localhost:8000/import_video_url', {
+  fetch(`${backendBaseUrl.value}/import_video_url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: videoUrlInput.value }),
@@ -814,7 +818,7 @@ const handleUrlSubmit = () => {
       }
 
       videoUrl.value = data.video_url
-      videoPath.value = data.video_path || ''
+      videoPath.value = data.object_key || data.video_path || ''
       videoFile.value = null
       report.value = ''
       analysisData.value = null
@@ -899,11 +903,147 @@ const buildConfig = () => ({
   openai_api_key: configStore.openai_api_key,
   openai_base_url: configStore.openai_base_url,
   llm_model: configStore.llm_model,
+  ocr_engine: configStore.ocr_engine,
+  vl_model: configStore.vl_model,
+  vl_base_url: configStore.vl_base_url,
+  vl_api_key: configStore.vl_api_key,
   model_size: configStore.model_size,
   device: configStore.device,
   compute_type: configStore.compute_type,
   capture_offset: configStore.capture_offset,
 })
+
+const readSseResponse = async (response) => {
+  if (!response.body) throw new Error('ReadableStream not supported')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const data = JSON.parse(line)
+        if (data.status === 'progress') {
+          progressMsg.value = data.message
+          if (data.message.includes('视频上传成功') || data.message.includes('视频加载成功')) progressPercent.value = 5
+          else if (data.message.includes('快速抽取音频流')) progressPercent.value = 10
+          else if (data.message.includes('音频提取')) progressPercent.value = 15
+          else if (data.message.includes('加载 Whisper 模型')) progressPercent.value = 20
+          else if (data.message.includes('正在进行 ASR 加速转录')) progressPercent.value = 30
+          else if (data.message.includes('转录完成')) progressPercent.value = 50
+          else if (data.message.includes('ASR 转录')) progressPercent.value = 55
+          else if (data.message.includes('发送给 LLM')) progressPercent.value = 60
+          else if (data.message.includes('LLM 分析')) progressPercent.value = 75
+          else if (data.message.includes('并行截取')) progressPercent.value = 80
+          else if (data.message.includes('并行截图')) progressPercent.value = 85
+          else if (data.message.includes('生成最终 Markdown')) progressPercent.value = 90
+        } else if (data.status === 'success') {
+          report.value = data.report
+          analysisData.value = data.data
+          if (analysisData.value.segments && Array.isArray(analysisData.value.segments)) {
+            analysisData.value.segments.sort((a, b) => a.timestamp - b.timestamp)
+          }
+          if (!videoFile.value && data.video_url) {
+            videoUrl.value = data.video_url
+          }
+          videoPath.value = data.object_key || data.video_path || ''
+
+          if (data.data.raw_transcript) {
+            const lines = data.data.raw_transcript.split('\n')
+            transcriptData.value = lines
+              .map(line => {
+                const match = line.match(/^\[(\d+(?:\.\d+)?)s\] (.*)$/)
+                if (match) {
+                  return {
+                    timestamp: parseFloat(match[1]),
+                    text: match[2]
+                  }
+                }
+                return null
+              })
+              .filter(item => item !== null)
+          }
+
+          progressMsg.value = 'Analysis completed!'
+          progressPercent.value = 100
+          Message.success('Analysis completed!')
+        } else if (data.status === 'error') {
+          throw new Error(data.message)
+        }
+      } catch (e) {
+        console.error('Error parsing line:', line, e)
+      }
+    }
+  }
+}
+
+const analyzeByObjectKey = async (objectKey, config) => {
+  const response = await fetch(`${backendBaseUrl.value}/analyze_path`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_path: objectKey, config }),
+  })
+  await readSseResponse(response)
+}
+
+const directUploadToMinioAndAnalyze = async (file, config) => {
+  progressPercent.value = 0
+  progressMsg.value = '请求上传地址...'
+
+  const presignRes = await fetch(`${backendBaseUrl.value}/minio/presign_upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name, content_type: file.type || 'application/octet-stream' }),
+  })
+  if (!presignRes.ok) {
+    const err = await presignRes.json().catch(() => null)
+    throw new Error(err?.detail || '获取 MinIO 上传地址失败')
+  }
+  const presign = await presignRes.json()
+
+  const objectKey = presign.object_key
+  const uploadUrl = presign.upload_url
+  const previewUrl = presign.video_url
+
+  if (objectKey) videoPath.value = objectKey
+
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', uploadUrl, true)
+    try {
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
+    } catch (e) {}
+
+    xhr.upload.onprogress = (evt) => {
+      if (!evt.lengthComputable) {
+        progressMsg.value = '上传中...'
+        return
+      }
+      const pct = Math.max(0, Math.min(99, Math.round((evt.loaded / evt.total) * 100)))
+      progressPercent.value = pct
+      progressMsg.value = `上传中... ${pct}%`
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new Error(`上传失败: ${xhr.status}`))
+    }
+    xhr.onerror = () => reject(new Error('上传失败: 网络错误'))
+    xhr.send(file)
+  })
+
+  progressMsg.value = '上传完成，开始分析...'
+  progressPercent.value = 5
+  await analyzeByObjectKey(objectKey, config)
+}
 
 const getTranscriptContext = () => {
   if (!transcriptData.value.length) return ''
@@ -1008,7 +1148,7 @@ const handleChatSend = async () => {
   }
 
   try {
-    ws = new WebSocket('ws://localhost:8000/ws/chat')
+    ws = new WebSocket(`${backendWsBaseUrl.value}/ws/chat`)
     
     ws.onopen = () => {
       console.log('WS Connected')
@@ -1120,7 +1260,7 @@ const translateTranscripts = async () => {
 
   translating.value = true
   try {
-    const response = await fetch('http://localhost:8000/translate', {
+    const response = await fetch(`${backendBaseUrl.value}/translate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1191,7 +1331,7 @@ const handleCaptureFrame = async () => {
   coursewareLoading.value = true
   
   try {
-    const response = await fetch('http://localhost:8000/capture_frame', {
+    const response = await fetch(`${backendBaseUrl.value}/capture_frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1247,89 +1387,16 @@ const handleSubmit = async () => {
   const config = buildConfig()
 
   try {
-    const response = hasUploadFile
-      ? await fetch('http://localhost:8000/analyze', {
-          method: 'POST',
-          body: (() => {
-            const formData = new FormData()
-            formData.append('video', videoFile.value)
-            formData.append('config_json', JSON.stringify(config))
-            return formData
-          })(),
-        })
-      : await fetch('http://localhost:8000/analyze_path', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ video_path: videoPath.value, config }),
-        })
-
-    if (!response.body) throw new Error('ReadableStream not supported')
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    
-    let buffer = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const data = JSON.parse(line)
-          if (data.status === 'progress') {
-            progressMsg.value = data.message
-            if (data.message.includes('视频上传成功') || data.message.includes('视频加载成功')) progressPercent.value = 5
-            else if (data.message.includes('快速抽取音频流')) progressPercent.value = 10
-            else if (data.message.includes('音频提取')) progressPercent.value = 15
-            else if (data.message.includes('加载 Whisper 模型')) progressPercent.value = 20
-            else if (data.message.includes('正在进行 ASR 加速转录')) progressPercent.value = 30
-            else if (data.message.includes('转录完成')) progressPercent.value = 50
-            else if (data.message.includes('ASR 转录')) progressPercent.value = 55
-            else if (data.message.includes('发送给 LLM')) progressPercent.value = 60
-            else if (data.message.includes('LLM 分析')) progressPercent.value = 75
-            else if (data.message.includes('并行截取')) progressPercent.value = 80
-            else if (data.message.includes('并行截图')) progressPercent.value = 85
-            else if (data.message.includes('生成最终 Markdown')) progressPercent.value = 90
-            
-          } else if (data.status === 'success') {
-            report.value = data.report
-            analysisData.value = data.data
-            // Ensure segments are sorted by timestamp for correct playback sync
-            if (analysisData.value.segments && Array.isArray(analysisData.value.segments)) {
-              analysisData.value.segments.sort((a, b) => a.timestamp - b.timestamp)
-            }
-            videoUrl.value = data.video_url
-            videoPath.value = data.video_path || ''
-            
-            if (data.data.raw_transcript) {
-              const lines = data.data.raw_transcript.split('\n')
-              transcriptData.value = lines.map(line => {
-                const match = line.match(/^\[(\d+(?:\.\d+)?)s\] (.*)$/)
-                if (match) {
-                  return {
-                    timestamp: parseFloat(match[1]),
-                    text: match[2]
-                  }
-                }
-                return null
-              }).filter(item => item !== null)
-            }
-            
-            progressMsg.value = 'Analysis completed!'
-            progressPercent.value = 100
-            Message.success('Analysis completed!')
-          } else if (data.status === 'error') {
-            throw new Error(data.message)
-          }
-        } catch (e) {
-          console.error('Error parsing line:', line, e)
-        }
-      }
+    if (hasUploadFile) {
+      const file = videoFile.value
+      await directUploadToMinioAndAnalyze(file, config)
+    } else {
+      const response = await fetch(`${backendBaseUrl.value}/analyze_path`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_path: videoPath.value, config }),
+      })
+      await readSseResponse(response)
     }
   } catch (error) {
     Message.error(error.message || 'Unknown error during analysis')
@@ -1509,6 +1576,13 @@ const handleSubmit = async () => {
   color: #ffffff;
 }
 
+.subtitle-lines {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .subtitle-text {
   width: 100%;
   text-align: center;
@@ -1517,6 +1591,11 @@ const handleSubmit = async () => {
   text-overflow: ellipsis;
   font-size: 14px;
   line-height: 1.4;
+}
+
+.subtitle-text-en {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
 }
 
 .placeholder-content {

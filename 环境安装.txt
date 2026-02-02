@@ -13,3 +13,6 @@ MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 MINIO_BUCKET=leader
 MINIO_SECURE=false
+
+本地跑
+.\minio.exe server E:\miniio --console-address ":9001"

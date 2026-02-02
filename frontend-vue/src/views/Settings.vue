@@ -36,13 +36,38 @@
                 />
               </a-form-item>
             </a-grid-item>
+            <a-grid-item :span="24">
+              <a-form-item field="backend_base_url" label="BACKEND URL">
+                <a-input 
+                  v-model="form.backend_base_url" 
+                  placeholder="http://localhost:18000" 
+                  class="custom-input"
+                />
+              </a-form-item>
+            </a-grid-item>
           </a-grid>
         </div>
 
         <a-divider class="form-divider" />
 
         <div class="form-section">
-          <div class="section-title">2. API Access (VL Model)</div>
+          <div class="section-title">2. OCR Engine</div>
+          <a-grid :cols="24" :col-gap="24">
+            <a-grid-item :span="24">
+              <a-form-item field="ocr_engine" label="OCR ENGINE">
+                <a-select v-model="form.ocr_engine" class="custom-select">
+                  <a-option value="vl">VL Model (Remote)</a-option>
+                  <a-option value="tesseract">Tesseract (Local)</a-option>
+                </a-select>
+              </a-form-item>
+            </a-grid-item>
+          </a-grid>
+        </div>
+
+        <a-divider v-if="form.ocr_engine === 'vl'" class="form-divider" />
+
+        <div v-if="form.ocr_engine === 'vl'" class="form-section">
+          <div class="section-title">3. API Access (VL Model)</div>
           <a-grid :cols="24" :col-gap="24">
             <a-grid-item :span="24">
               <a-form-item field="vl_api_key" label="VL API KEY">
@@ -77,7 +102,7 @@
         <a-divider class="form-divider" />
         
         <div class="form-section">
-          <div class="section-title">3. Processing Parameters</div>
+          <div class="section-title">4. Processing Parameters</div>
           <a-grid :cols="24" :col-gap="24" :row-gap="16">
             <a-grid-item :span="12">
               <a-form-item field="model_size" label="WHISPER SIZE">
@@ -135,9 +160,11 @@ import { Message } from '@arco-design/web-vue'
 const configStore = useConfigStore()
 
 const form = reactive({
+  backend_base_url: configStore.backend_base_url,
   openai_api_key: configStore.openai_api_key,
   openai_base_url: configStore.openai_base_url,
   llm_model: configStore.llm_model,
+  ocr_engine: configStore.ocr_engine,
   vl_model: configStore.vl_model,
   vl_base_url: configStore.vl_base_url,
   vl_api_key: configStore.vl_api_key,
