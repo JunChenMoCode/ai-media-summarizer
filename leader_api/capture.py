@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import tempfile
 import uuid
@@ -11,6 +12,7 @@ from .minio_store import (
     extract_job_id_from_object_key,
     minio_download_to_file,
     minio_object_exists,
+    minio_object_etag_md5,
     minio_object_key,
     minio_presigned_url,
     minio_upload_file,
@@ -20,6 +22,13 @@ from .minio_store import (
 from .models import CaptureRequest
 
 router = APIRouter()
+
+def _file_md5(path: str) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 @router.post("/capture_frame")
@@ -44,6 +53,9 @@ async def capture_frame(req: FastAPIRequest, request: CaptureRequest):
 
     job_id = extract_job_id_from_object_key(video_object_key) or str(uuid.uuid4())
     video_source = minio_presigned_url(video_object_key)
+    video_md5 = (request.video_md5 or "").strip().lower()
+    if not video_md5:
+        video_md5 = minio_object_etag_md5(video_object_key)
 
     with tempfile.TemporaryDirectory(prefix="leader-cap-") as temp_out:
         output_dir = os.path.join(temp_out, job_id)
@@ -57,6 +69,8 @@ async def capture_frame(req: FastAPIRequest, request: CaptureRequest):
                 local_fallback_path = tf.name
             try:
                 minio_download_to_file(video_object_key, local_fallback_path)
+                if not video_md5:
+                    video_md5 = _file_md5(local_fallback_path)
                 analyzer = FastVideoAnalyzer(video_path=local_fallback_path, output_dir=output_dir, config={})
                 image_path = await loop.run_in_executor(None, lambda: analyzer.capture_frame(timestamp=request.timestamp))
             except Exception as e:
@@ -73,5 +87,15 @@ async def capture_frame(req: FastAPIRequest, request: CaptureRequest):
         p_normalized = image_path.replace(os.sep, "/")
         object_key = minio_object_key("outputs", job_id, p_normalized)
         url = minio_upload_file(os.path.join(output_dir, image_path), object_key, content_type="image/jpeg")
-        return {"url": url, "timestamp": request.timestamp}
+        try:
+            if video_md5 and len(video_md5) == 32:
+                from .mysql_store import append_artifact_event_by_md5
 
+                append_artifact_event_by_md5(
+                    video_md5,
+                    artifact_type="captured_frame",
+                    content_json={"timestamp": float(request.timestamp), "object_key": object_key, "url": url},
+                )
+        except Exception:
+            pass
+        return {"url": url, "timestamp": request.timestamp, "object_key": object_key, "video_md5": video_md5}

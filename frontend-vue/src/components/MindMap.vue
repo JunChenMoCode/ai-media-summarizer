@@ -259,9 +259,16 @@ watch(() => props.data, (newData) => {
 
 const handleResize = () => {
   if (!graph || !container.value) return;
-  graph.changeSize(container.value.clientWidth, container.value.clientHeight);
+  const width = container.value.clientWidth;
+  const height = container.value.clientHeight;
+  // Ensure we have valid dimensions
+  if (width === 0 || height === 0) return;
+  
+  graph.changeSize(width, height);
   graph.fitView();
 };
+
+let resizeObserver = null;
 
 onMounted(() => {
   // Delay slightly to ensure fonts loaded / styles ready
@@ -269,7 +276,17 @@ onMounted(() => {
      initGraph();
   }, 100);
   
-  window.addEventListener('resize', handleResize);
+  // Use ResizeObserver for more robust size detection
+  resizeObserver = new ResizeObserver(() => {
+    // Use requestAnimationFrame to avoid "ResizeObserver loop limit exceeded"
+    requestAnimationFrame(() => {
+      handleResize();
+    });
+  });
+  
+  if (container.value) {
+    resizeObserver.observe(container.value);
+  }
   
   themeObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
@@ -293,7 +310,9 @@ onUnmounted(() => {
   if (graph) {
     graph.destroy();
   }
-  window.removeEventListener('resize', handleResize);
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
   if (themeObserver) {
     themeObserver.disconnect();
   }

@@ -4,8 +4,11 @@ opencv-python
 ffmpeg-python
 python-dotenv
 imageio-ffmpeg
+SQLAlchemy>=2.0.0
+pymysql>=1.1.0
 torch>=2.6.0
 transformers==4.55.0
 sentencepiece
 minio
 yt-dlp
+cryptography

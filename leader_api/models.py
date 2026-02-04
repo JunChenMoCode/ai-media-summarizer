@@ -34,6 +34,7 @@ class TranscriptLine(BaseModel):
 class TranslateRequest(BaseModel):
     lines: list[TranscriptLine]
     config: ConfigModel
+    video_md5: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -51,11 +52,13 @@ class ChatRequest(BaseModel):
 class MindMapRequest(BaseModel):
     transcript: str
     config: ConfigModel
+    video_md5: str | None = None
 
 
 class NotesRequest(BaseModel):
     transcript: str
     config: ConfigModel
+    video_md5: str | None = None
 
 
 class CoursewareOcrItem(BaseModel):
@@ -67,6 +70,7 @@ class CoursewareOcrItem(BaseModel):
 class CoursewareOcrRequest(BaseModel):
     items: list[CoursewareOcrItem]
     config: ConfigModel
+    video_md5: str | None = None
 
 
 class ImportVideoUrlRequest(BaseModel):
@@ -86,4 +90,4 @@ class PresignUploadRequest(BaseModel):
 class CaptureRequest(BaseModel):
     video_filename: str
     timestamp: float
-
+    video_md5: str | None = None

@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi.staticfiles import StaticFiles
 from .core import bootstrap_env
 from .analyze import router as analyze_router
 from .capture import router as capture_router
@@ -31,7 +32,13 @@ def create_app() -> FastAPI:
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
+
+    # 挂载静态文件目录，用于访问生成的图片等
+    static_dir = os.path.join(os.getcwd(), "fast_output")
+    os.makedirs(static_dir, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     # 路由按模块拆分，每个模块只关注自己的职责
     app.include_router(minio_router)

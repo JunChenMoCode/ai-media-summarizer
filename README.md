@@ -1,13 +1,13 @@
-# Leader：高性能视频总结（Web 版）
+# 🚀 Leader：高性能视频总结（Web 版）
 
 这是一个“音频直提 + ASR 加速 + LLM 分段 + 按需并行截图”的视频总结工具，提供 **FastAPI 后端** + **Vue3 前端** 的交互式 Web 界面，支持：
 
-- 上传本地视频（直传 MinIO）或粘贴 URL 导入（yt-dlp）
-- 一键生成摘要/图文详解、思维导图、文稿笔记
-- 双语字幕翻译与双字幕展示
-- 课件截图与 OCR（支持 VL 模型远程 OCR 或本地 Tesseract）
+- 🎥 上传本地视频（直传 MinIO）或粘贴 URL 导入（yt-dlp）
+- 🧠 一键生成摘要/图文详解、思维导图、文稿笔记
+- 🌍 双语字幕翻译与双字幕展示
+- 📚 课件截图与 OCR（支持 VL 模型远程 OCR 或本地 Tesseract）
 
-## 架构概览
+## 🏗️ 架构概览
 
 - 后端入口：`main.py`（uvicorn 入口尽量保持精简）
 - 后端实现：`leader_api/`（按职责拆分）
@@ -22,31 +22,31 @@
   - `leader_api/llm_routes.py`：聊天/思维导图/笔记
 - 前端：`frontend-vue/`（Vite + Vue3 + Arco）
 
-## 存储策略（重要）
+## 💾 存储策略（重要）
 
 本项目默认 **MinIO Only**：
 
-- 视频文件：上传到 `uploads/<job_id>/...`
-- 分析产物：上传到 `outputs/<job_id>/...`（markdown + 图片等）
-- 服务端分析时只使用临时目录写入中间产物，结束后统一上传到 MinIO，不依赖本地 `fast_output/`、`web_uploads/` 等持久目录
+- 📹 视频文件：上传到 `uploads/<job_id>/...`
+- 📊 分析产物：上传到 `outputs/<job_id>/...`（markdown + 图片等）
+- 🧹 服务端分析时只使用临时目录写入中间产物，结束后统一上传到 MinIO，不依赖本地 `fast_output/`、`web_uploads/` 等持久目录
 
-## 运行依赖
+## 🛠️ 运行依赖
 
-- Python（建议 3.10+）
-- Node.js（用于前端，建议 18+）
-- FFmpeg（用于音频抽取/视频处理）
-- MinIO（必须，用于视频与产物存储）
-- 可选：Tesseract OCR（仅当选择 “Tesseract (Local)” 作为 OCR 引擎）
+- 🐍 Python（建议 3.10+）
+- 📦 Node.js（用于前端，建议 18+）
+- 🎬 FFmpeg（用于音频抽取/视频处理）
+- 🗄️ MinIO（必须，用于视频与产物存储）
+- 👁️ 可选：Tesseract OCR（仅当选择 “Tesseract (Local)” 作为 OCR 引擎）
 
-## 快速开始（本地开发）
+## ⚡ 快速开始（本地开发）
 
-### 1) 安装 Python 依赖
+### 1) 📥 安装 Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2) 配置 .env
+### 2) ⚙️ 配置 .env
 
 复制 `.env.example` 为 `.env`，然后按需修改（不要把真实 key 提交到仓库）：
 
@@ -77,7 +77,7 @@ MINIO_PUBLIC_BASE_URL=http://127.0.0.1:9000
 YTDLP_PROXY=http://127.0.0.1:7897
 ```
 
-### 3) 启动 MinIO
+### 3) 🗄️ 启动 MinIO
 
 二选一：
 
@@ -100,13 +100,13 @@ docker run -d --name leader-minio --restart unless-stopped ^
 
 MinIO 控制台默认：`http://127.0.0.1:9001`
 
-### 4) 启动后端（FastAPI）
+### 4) 🚀 启动后端（FastAPI）
 
 ```bash
 python -m uvicorn main:app --host 0.0.0.0 --port 18000
 ```
 
-### 5) 启动前端（Vue3）
+### 5) 💻 启动前端（Vue3）
 
 ```bash
 cd frontend-vue
@@ -116,7 +116,7 @@ npm run dev
 
 打开前端后，在 Settings 中确认 `BACKEND URL`（默认 `http://localhost:18000`）。
 
-## OCR 引擎选择
+## 👁️ OCR 引擎选择
 
 前端 Settings 支持选择 OCR 引擎：
 
@@ -131,7 +131,7 @@ npm run dev
    - 未设置时默认使用 `<项目根目录>/model/tessdata`
 3) 默认识别语言：`chi_sim+eng`，可用 `TESSERACT_LANG` 覆盖
 
-## 常见问题排查
+## ❓ 常见问题排查
 
 ### 1) 分析完视频后播放器灰屏、0:00 播不了
 

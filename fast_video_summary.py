@@ -124,6 +124,36 @@ class FastVideoAnalyzer:
             return audio_path
 
 
+    def has_video_stream(self):
+        try:
+            print(f">>> Checking video stream for: {self.video_path}")
+            cap = cv2.VideoCapture(self.video_path)
+            if not cap.isOpened():
+                print(f"DEBUG: cv2.VideoCapture failed to open {self.video_path}")
+                cap.release()
+                return False
+            
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            cap.release()
+            
+            print(f"DEBUG: Video Probe: fps={fps}, frames={frame_count}, w={width}, h={height}")
+
+            # 宽松检查：如果分辨率正常，通常就是视频
+            if width > 0 and height > 0:
+                return True
+
+            if not fps or fps <= 0.1:
+                return False
+            if not frame_count or frame_count <= 0:
+                return False
+            return True
+        except Exception as e:
+            print(f"DEBUG: has_video_stream exception: {e}")
+            return False
+
     def capture_frame(self, timestamp, output_subfolder="courseware"):
         """截取指定时间戳的帧"""
         print(f">>> 截取帧 at {timestamp}s...")
@@ -360,8 +390,8 @@ class FastVideoAnalyzer:
                 title = seg.get("title", "未命名段落")
                 f.write(f"### {i+1}. {title} `{t_str}`\n\n")
                 
-                # 图片展示
-                f.write(f"![{title}]({img})\n\n")
+                if img:
+                    f.write(f"![{title}]({img})\n\n")
                 
                 # 要点列表
                 points = seg.get('points', [])
@@ -418,10 +448,13 @@ class FastVideoAnalyzer:
             self.log(f"   [耗时] LLM 分析: {time.time() - t2:.2f} 秒")
             
             if ai_analysis:
+                has_video = self.has_video_stream()
+                ai_analysis["media_type"] = "video" if has_video else "audio"
                 # 4. 并行截图
-                t3 = time.time()
-                self.parallel_screenshots(ai_analysis.get("segments", []))
-                self.log(f"   [耗时] 并行截图: {time.time() - t3:.2f} 秒")
+                if has_video:
+                    t3 = time.time()
+                    self.parallel_screenshots(ai_analysis.get("segments", []))
+                    self.log(f"   [耗时] 并行截图: {time.time() - t3:.2f} 秒")
                 
                 # 5. 输出报告
                 t4 = time.time()

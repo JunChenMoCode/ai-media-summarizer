@@ -103,6 +103,16 @@ def sanitize_filename(name: str) -> str:
     return base
 
 
+def sanitize_stem(name: str) -> str:
+    base = re.sub(r"[^\w\u4e00-\u9fff\-\.\s]+", "_", (name or "").strip())
+    base = re.sub(r"\s+", " ", base).strip()
+    if not base:
+        base = "media"
+    if len(base) > 80:
+        base = base[:80].strip()
+    return base
+
+
 def guess_platform_from_url(url: str) -> str:
     """
     根据 URL host 粗略推断平台，用于错误提示（例如 YouTube 可能需要代理）。
@@ -121,4 +131,3 @@ def guess_platform_from_url(url: str) -> str:
     if "douyin.com" in host or "iesdouyin.com" in host:
         return "douyin"
     return host
-

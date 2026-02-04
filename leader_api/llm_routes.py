@@ -22,6 +22,13 @@ async def websocket_chat(websocket: WebSocket):
       - {"type":"error","content":"..."}（异常）
     """
     await websocket.accept()
+    video_md5 = ""
+    transcript = ""
+    summary = ""
+    messages = []
+    used_model = ""
+    assistant_reasoning = ""
+    assistant_content = ""
     try:
         data = await websocket.receive_json()
 
@@ -35,6 +42,8 @@ async def websocket_chat(websocket: WebSocket):
             transcript = ""
             summary = ""
             config_data = {}
+
+        video_md5 = (data.get("video_md5", "") or "").strip().lower()
 
         # 仅提取我们真正会用到的字段，避免把旧字段带进来造成困扰
         config = ConfigModel(
@@ -73,6 +82,7 @@ async def websocket_chat(websocket: WebSocket):
 
         try:
             response = await create_chat_stream(current_model)
+            used_model = current_model
         except Exception as e:
             error_str = str(e)
             if "Model does not exist" in error_str or "400" in error_str:
@@ -84,6 +94,7 @@ async def websocket_chat(websocket: WebSocket):
                     try:
                         print(f"Trying fallback chat model: {fallback}")
                         response = await create_chat_stream(fallback)
+                        used_model = fallback
                         success = True
                         break
                     except Exception as inner_e:
@@ -101,14 +112,80 @@ async def websocket_chat(websocket: WebSocket):
             # 部分模型（例如 DeepSeek R1 风格）可能会返回“推理内容”
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
+                assistant_reasoning += reasoning
                 await websocket.send_json({"type": "reasoning", "delta": reasoning})
 
             if delta.content:
+                assistant_content += delta.content
                 await websocket.send_json({"type": "content", "delta": delta.content})
 
     except Exception as e:
         await websocket.send_json({"type": "error", "content": str(e)})
     finally:
+        try:
+            if video_md5 and len(video_md5) == 32 and assistant_content:
+                from .mysql_store import _sanitize_config, append_artifact_event_by_md5
+
+                def _extract_think_blocks(text: str) -> tuple[str, str]:
+                    if not text:
+                        return "", ""
+                    s = str(text)
+                    think_parts: list[str] = []
+                    out_parts: list[str] = []
+                    i = 0
+                    while i < len(s):
+                        start = s.find("<think>", i)
+                        if start < 0:
+                            out_parts.append(s[i:])
+                            break
+                        out_parts.append(s[i:start])
+                        end = s.find("</think>", start + len("<think>"))
+                        if end < 0:
+                            out_parts.append(s[start:])
+                            break
+                        think_parts.append(s[start + len("<think>") : end])
+                        i = end + len("</think>")
+                    clean = "".join(out_parts)
+                    think = "".join(think_parts)
+                    return clean, think
+
+                clean_content, think_from_content = _extract_think_blocks(assistant_content)
+                merged_reasoning = assistant_reasoning or ""
+                if think_from_content.strip():
+                    merged_reasoning = (merged_reasoning + "\n" + think_from_content).strip() if merged_reasoning else think_from_content.strip()
+
+                normalized_messages = []
+                for msg in messages or []:
+                    if not isinstance(msg, dict):
+                        continue
+                    role = (msg.get("role") or "").strip()
+                    content = msg.get("content", "")
+                    if not role:
+                        continue
+                    normalized = {"role": role, "content": content}
+                    if "kind" in msg and msg.get("kind") is not None:
+                        normalized["kind"] = msg.get("kind")
+                    normalized_messages.append(normalized)
+
+                if merged_reasoning:
+                    normalized_messages.append(
+                        {"role": "assistant", "kind": "reasoning", "content": merged_reasoning, "reasoningExpanded": False}
+                    )
+                normalized_messages.append({"role": "assistant", "kind": "content", "content": clean_content})
+
+                append_artifact_event_by_md5(
+                    video_md5,
+                    artifact_type="chat_session",
+                    content_json={
+                        "model": used_model,
+                        "messages": normalized_messages,
+                        "assistant": {"content": clean_content, "reasoning": merged_reasoning},
+                        "context": {"transcript": transcript, "summary": summary},
+                    },
+                    artifact_meta={"config": _sanitize_config(config_data)},
+                )
+        except Exception:
+            pass
         await websocket.close()
 
 
@@ -129,13 +206,13 @@ async def generate_mindmap(request: MindMapRequest):
 结构示例：
 {
   "id": "root",
-  "label": "核心主题",
+  "label": "🎥 核心主题",
   "children": [
     {
       "id": "c1",
-      "label": "分支1",
+      "label": "🌟 分支1",
       "children": [
-        {"id": "c1-1", "label": "子节点1"}
+        {"id": "c1-1", "label": "💡 子节点1"}
       ]
     }
   ]
@@ -147,6 +224,7 @@ async def generate_mindmap(request: MindMapRequest):
 3. 后续子节点是详细知识点。
 4. 确保 id 唯一。
 5. 只返回 JSON，不要包含 Markdown 格式标记 (如 ```json)。
+6. 请在每个节点的 label 中适当增加 Emoji 表情符号进行修饰，使思维导图更加生动直观。
 """
 
     try:
@@ -186,7 +264,21 @@ async def generate_mindmap(request: MindMapRequest):
             if content.endswith("```"):
                 content = content[:-3].strip()
 
-        return json.loads(content)
+        result = json.loads(content)
+        try:
+            if request.video_md5:
+                from .mysql_store import _sanitize_config, save_artifact_by_md5
+
+                save_artifact_by_md5(
+                    request.video_md5,
+                    artifact_type="mindmap_g6",
+                    artifact_version=1,
+                    content_json=result,
+                    artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+                )
+        except Exception:
+            pass
+        return result
     except Exception as e:
         import traceback
 
@@ -253,5 +345,17 @@ async def generate_notes(request: NotesRequest):
             raise e
 
     content = response.choices[0].message.content
-    return {"notes": content}
+    try:
+        if request.video_md5:
+            from .mysql_store import _sanitize_config, save_artifact_by_md5
 
+            save_artifact_by_md5(
+                request.video_md5,
+                artifact_type="notes_markdown",
+                artifact_version=1,
+                content_text=content,
+                artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+            )
+    except Exception:
+        pass
+    return {"notes": content}

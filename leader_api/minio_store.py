@@ -155,6 +155,22 @@ def minio_object_exists(object_key: str) -> bool:
         return False
 
 
+def minio_object_etag_md5(object_key: str) -> str:
+    if not minio_enabled():
+        return ""
+    minio_ensure_bucket()
+    client = minio_get_client()
+    bucket = _minio_bucket()
+    try:
+        stat = client.stat_object(bucket, object_key)
+        etag = (getattr(stat, "etag", "") or "").strip().strip('"').lower()
+        if len(etag) == 32 and all(c in "0123456789abcdef" for c in etag):
+            return etag
+        return ""
+    except Exception:
+        return ""
+
+
 def minio_download_to_file(object_key: str, local_path: str) -> None:
     """
     将对象下载到本地临时文件。
@@ -182,6 +198,33 @@ def normalize_video_object_key(video_ref: str) -> str:
     return minio_object_key("uploads", ref)
 
 
+def minio_remove_object(object_key: str) -> None:
+    if not minio_enabled():
+        return
+    minio_ensure_bucket()
+    client = minio_get_client()
+    bucket = _minio_bucket()
+    try:
+        client.remove_object(bucket, object_key)
+    except Exception:
+        pass
+
+
+def minio_remove_folder(prefix: str) -> None:
+    if not minio_enabled():
+        return
+    minio_ensure_bucket()
+    client = minio_get_client()
+    bucket = _minio_bucket()
+    
+    # List all objects with prefix
+    objects = client.list_objects(bucket, prefix=prefix, recursive=True)
+    for obj in objects:
+        try:
+            client.remove_object(bucket, obj.object_name)
+        except Exception:
+            pass
+
 def extract_job_id_from_object_key(object_key: str) -> str:
     k = (object_key or "").replace("\\", "/").lstrip("/")
     if k.startswith("uploads/"):
@@ -206,4 +249,3 @@ def minio_upload_tree(local_dir: str, object_prefix: str) -> None:
             rel = os.path.relpath(local_path, local_dir).replace(os.sep, "/")
             object_key = minio_object_key(prefix, rel)
             minio_upload_file(local_path, object_key)
-

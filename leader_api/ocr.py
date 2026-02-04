@@ -272,7 +272,19 @@ async def ocr_courseware(request: CoursewareOcrRequest):
         import asyncio
 
         results = await asyncio.to_thread(run)
+        try:
+            video_md5 = (request.video_md5 or "").strip().lower()
+            if video_md5 and len(video_md5) == 32:
+                from .mysql_store import _sanitize_config, append_artifact_event_by_md5
+
+                append_artifact_event_by_md5(
+                    video_md5,
+                    artifact_type="courseware_ocr",
+                    content_json={"items": [i.model_dump() for i in items], "results": results},
+                    artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+                )
+        except Exception:
+            pass
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

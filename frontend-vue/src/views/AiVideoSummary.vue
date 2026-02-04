@@ -6,7 +6,7 @@
         <input
           ref="localVideoInputRef"
           type="file"
-          accept="video/*"
+          accept="video/*,audio/*"
           style="display: none"
           @change="handleLocalVideoInputChange"
         />
@@ -14,7 +14,7 @@
           <div class="video-topbar-input">
             <a-input-search
               v-model="videoUrlInput"
-              placeholder="粘贴视频链接，回车加载"
+              placeholder="粘贴视频/音频链接，回车加载"
               button-text="加载"
               search-button
               allow-clear
@@ -24,28 +24,92 @@
           </div>
           <a-button type="outline" @click="openLocalVideoPicker">
             <template #icon><icon-upload /></template>
-            上传本地视频
+            上传本地视频/音频
           </a-button>
         </div>
-        <div class="video-wrapper">
+        <div
+          class="video-wrapper"
+          @dragenter.prevent="handleVideoDragEnter"
+          @dragover.prevent="handleVideoDragOver"
+          @dragleave.prevent="handleVideoDragLeave"
+          @drop.prevent="handleVideoDrop"
+        >
           <div v-if="loading" class="video-overlay">
             <ChipLoader :progress="progressPercent" :text="progressMsg" />
+          </div>
+          <div v-else-if="videoDragActive" class="video-drag-overlay">
+            <div class="video-drag-overlay-inner">
+              <div class="video-drag-title">松开即可加载本地视频/音频</div>
+              <div class="video-drag-sub">支持 mp4/mov/mkv/webm/mp3/m4a/wav 等</div>
+            </div>
           </div>
           <div v-if="!videoUrl" class="video-placeholder" @click="openLocalVideoPicker">
             <div class="placeholder-content">
               <icon-plus :style="{ fontSize: '40px' }" />
-              <p class="placeholder-title">点击添加视频源</p>
-              <p class="placeholder-desc">支持本地视频上传或粘贴 URL</p>
+              <p class="placeholder-title">点击添加媒体源</p>
+              <p class="placeholder-desc">支持本地视频/音频上传或粘贴 URL</p>
             </div>
           </div>
-          <video 
-            v-else 
-            ref="videoRef" 
-            :src="videoUrl" 
-            controls 
+          <video
+            v-else-if="mediaType !== 'audio'"
+            ref="videoRef"
+            :src="videoUrl"
+            controls
             class="summary-video-player"
             @timeupdate="handleTimeUpdate"
+            @play="handleVideoPlay"
+            crossorigin="anonymous"
           ></video>
+          <div v-else class="audio-stage">
+            <div class="audio-center-wave">
+              <AudioParticleVisualizer
+                ref="audioVizRef"
+                :mediaEl="videoRef"
+                :active="!!videoUrl"
+                variant="radial"
+                layout="inline"
+                :interactive="false"
+                :showHint="false"
+                :barDensity="9"
+              />
+            </div>
+            <audio
+              ref="videoRef"
+              :src="videoUrl"
+              preload="metadata"
+              class="summary-audio-player"
+              @loadedmetadata="handleAudioLoadedMetadata"
+              @timeupdate="handleAudioTimeUpdate"
+              @play="handleAudioPlay"
+              @pause="handleAudioPause"
+              @ended="handleAudioEnded"
+              @error="handleAudioError"
+              crossorigin="anonymous"
+            ></audio>
+            <div class="summary-audio-controls">
+              <button class="audio-ctrl-btn" type="button" :disabled="!audioCanPlay" @click="toggleAudioPlayback">
+                <icon-play v-if="!audioPlaying" :style="{ width: '18px', height: '18px' }" />
+                <icon-pause v-else :style="{ width: '18px', height: '18px' }" />
+              </button>
+              <div class="audio-time">{{ formatClock(currentTime) }}</div>
+              <div class="audio-progress-wrap">
+                <input
+                  class="audio-progress"
+                  type="range"
+                  min="0"
+                  max="1000"
+                  step="1"
+                  :value="audioSeekValue"
+                  :disabled="!audioSeekable"
+                  :style="{ '--progress': `${audioSeekPercent}%` }"
+                  @pointerdown="handleSeekPointerDown"
+                  @input="handleSeekInput"
+                  @change="handleSeekChange"
+                />
+              </div>
+              <div class="audio-time">{{ formatClock(audioDuration) }}</div>
+            </div>
+          </div>
         </div>
 
         <div v-if="videoUrl" class="subtitle-bar">
@@ -79,7 +143,7 @@
               <template #icon><icon-book-open /></template>
               生成文稿笔记
             </a-button>
-            <a-button type="outline" @click="handleCaptureFrame" :loading="coursewareLoading">
+            <a-button v-if="mediaType !== 'audio'" type="outline" @click="handleCaptureFrame" :loading="coursewareLoading">
               <template #icon><icon-camera /></template>
               截取当前帧
             </a-button>
@@ -219,7 +283,7 @@
           </a-tab-pane>
 
            <!-- Tab: Courseware -->
-          <a-tab-pane key="courseware" title="课件">
+          <a-tab-pane v-if="mediaType !== 'audio'" key="courseware" title="课件">
             <div class="courseware-tab-content">
               <div v-if="coursewareLoading" class="mindmap-loading">
                   <icon-camera spin :style="{ fontSize: '48px', color: 'var(--primary-color)' }" />
@@ -256,9 +320,14 @@
                            <icon-clock-circle /> {{ formatTime(item.timestamp) }}
                         </div>
                       </div>
-                      <a-button type="text" size="mini" :href="item.url" download target="_blank" @click.stop>
-                        <icon-download />
-                      </a-button>
+                      <div class="info-right">
+                        <a-button size="mini" status="danger" @click.stop="handleDeleteCourseware(idx)">
+                          <template #icon><IconTrash /></template>
+                        </a-button>
+                        <a-button type="text" size="mini" :href="item.url" download target="_blank" @click.stop>
+                          <icon-download />
+                        </a-button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -280,8 +349,16 @@
                 </div>
                 <div v-else class="chat-message-list">
                   <div v-for="(msg, idx) in chatMessages" :key="idx" class="chat-message" :class="[msg.role, msg.kind]">
-                    <div class="chat-bubble" v-if="msg.role === 'user'">{{ msg.content }}</div>
+                    <div class="chat-bubble-wrapper" v-if="msg.role === 'user'">
+                      <div class="chat-bubble">{{ msg.content }}</div>
+                      <div class="chat-delete-btn" @click="handleDeleteMessage(idx)">
+                        <IconTrash />
+                      </div>
+                    </div>
                     <div class="chat-bubble-container" v-else>
+                      <div class="chat-delete-btn" @click="handleDeleteMessage(idx)">
+                        <IconTrash />
+                      </div>
                       <div v-if="msg.kind === 'reasoning'" class="reasoning-box">
                         <details :open="msg.reasoningExpanded" @toggle="(e) => msg.reasoningExpanded = e.target.open">
                           <summary>
@@ -326,7 +403,7 @@
                   @click="jumpToTime(seg.timestamp)"
                 >
                   <div class="segment-thumb">
-                    <img :src="seg.image_url" :alt="seg.title" />
+                    <img v-if="seg.image_url" :src="seg.image_url" :alt="seg.title" />
                     <div class="segment-time-badge">{{ formatTime(seg.timestamp) }}</div>
                   </div>
                   <div class="segment-info">
@@ -364,7 +441,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useConfigStore } from '../stores/config'
 import { Message } from '@arco-design/web-vue'
 import { marked } from 'marked'
@@ -372,12 +449,15 @@ import { processStreamedOutput, flushStreamBuffer } from '../utils/processStream
 import ChipLoader from '../components/ChipLoader.vue'
 import MindMap from '../components/MindMap.vue'
 import UVCheckbox from '../components/UVCheckbox.vue'
+import AudioParticleVisualizer from '../components/AudioParticleVisualizer.vue'
 import { 
   List as IconList,
   Copy as IconCopy,
   Download as IconDownload,
   File as IconFile,
   Plus as IconPlus,
+  Play as IconPlay,
+  Pause as IconPause,
   RefreshCw as IconRefreshCw,
   Share as IconShareInternal,
   Bot as IconRobot,
@@ -387,10 +467,12 @@ import {
   ArrowLeft as IconArrowLeft,
   Workflow as IconWorkflow,
   BookOpen as IconBookOpen,
-  FileText as IconFileText
+  FileText as IconFileText,
+  Trash2 as IconTrash
 } from 'lucide-vue-next'
 
 const router = useRouter()
+const route = useRoute()
 const configStore = useConfigStore()
 const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
 const backendWsBaseUrl = computed(() => {
@@ -409,7 +491,9 @@ const report = ref('')
 const analysisData = ref(null)
 const videoUrl = ref('')
 const videoPath = ref('')
+const videoMd5 = ref('')
 const videoFile = ref(null)
+const mediaType = ref('video')
 const videoUrlInput = ref('')
 const importingVideo = ref(false)
 const activeRightTab = ref('transcript')
@@ -418,6 +502,11 @@ const translatedTranscriptData = ref([])
 const bilingualEnabled = ref(false)
 const translating = ref(false)
 const currentTime = ref(0)
+const audioDuration = ref(0)
+const audioPlaying = ref(false)
+const audioSeeking = ref(false)
+const audioSeekValue = ref(0)
+const audioVizRef = ref(null)
 const chatMessages = ref([])
 const chatInput = ref('')
 const chatLoading = ref(false)
@@ -433,6 +522,7 @@ const coursewareOcrLoading = ref(false)
 const coursewareOcrModalVisible = ref(false)
 const coursewareOcrResults = ref([])
 const localVideoInputRef = ref(null)
+const videoDragActive = ref(false)
 
 const getCoursewareKey = (item, idx) => `${idx}|${item?.timestamp ?? ''}|${item?.url ?? ''}`
 
@@ -446,6 +536,12 @@ const setCoursewareSelected = (key, checked) => {
     next.delete(key)
   }
   selectedCoursewareKeys.value = next
+}
+
+const handleDeleteCourseware = (idx) => {
+  if (coursewareData.value) {
+    coursewareData.value.splice(idx, 1);
+  }
 }
 
 const handleCoursewareOcr = async () => {
@@ -475,7 +571,7 @@ const handleCoursewareOcr = async () => {
     const response = await fetch(`${backendBaseUrl.value}/ocr_courseware`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: selectedItems, config: config }),
+      body: JSON.stringify({ items: selectedItems, config: config, video_md5: videoMd5.value || '' }),
     })
 
     if (!response.ok) {
@@ -516,7 +612,8 @@ const handleGenerateNotes = async () => {
           },
           body: JSON.stringify({
               transcript: fullTranscript,
-              config: config
+              config: config,
+              video_md5: videoMd5.value || ''
           })
       });
 
@@ -595,7 +692,8 @@ const handleGenerateMindmap = async () => {
           },
           body: JSON.stringify({
               transcript: fullTranscript,
-              config: config
+              config: config,
+              video_md5: videoMd5.value || ''
           })
       });
 
@@ -762,6 +860,41 @@ const openLocalVideoPicker = () => {
   el.click()
 }
 
+const handleVideoDragEnter = () => {
+  if (loading.value) return
+  videoDragActive.value = true
+}
+
+const handleVideoDragOver = () => {
+  if (loading.value) return
+  videoDragActive.value = true
+}
+
+const handleVideoDragLeave = (e) => {
+  const next = e?.relatedTarget
+  if (next && e?.currentTarget && e.currentTarget.contains(next)) return
+  videoDragActive.value = false
+}
+
+const handleVideoDrop = (e) => {
+  videoDragActive.value = false
+  if (loading.value) {
+    Message.warning('分析中，稍后再试')
+    return
+  }
+  const file = e?.dataTransfer?.files?.[0] || null
+  if (!file) return
+  const type = String(file.type || '').toLowerCase()
+  const name = String(file.name || '').toLowerCase()
+  const looksVideo = type.startsWith('video/') || /\.(mp4|mov|mkv|webm|avi|flv|m4v)$/.test(name)
+  const looksAudio = type.startsWith('audio/') || /\.(mp3|m4a|wav|flac|aac|ogg|opus)$/.test(name)
+  if (!looksVideo && !looksAudio) {
+    Message.warning('请拖拽视频或音频文件')
+    return
+  }
+  setLocalVideoFile(file)
+}
+
 const handleLocalVideoInputChange = (e) => {
   const file = e?.target?.files?.[0] || null
   if (!file) return
@@ -774,6 +907,14 @@ const setLocalVideoFile = (file) => {
     try {
       URL.revokeObjectURL(prev)
     } catch (e) {}
+  }
+
+  const type = String(file?.type || '').toLowerCase()
+  const name = String(file?.name || '').toLowerCase()
+  const looksAudio = type.startsWith('audio/') || /\.(mp3|m4a|wav|flac|aac|ogg|opus)$/.test(name)
+  mediaType.value = looksAudio ? 'audio' : 'video'
+  if (mediaType.value === 'audio' && activeRightTab.value === 'courseware') {
+    activeRightTab.value = 'transcript'
   }
 
   videoFile.value = file
@@ -789,7 +930,7 @@ const setLocalVideoFile = (file) => {
   coursewareData.value = []
   selectedCoursewareKeys.value = new Set()
 
-  Message.success('本地视频已加载')
+  Message.success(mediaType.value === 'audio' ? '本地音频已加载' : '本地视频已加载')
 }
 
 const handleUrlSubmit = () => {
@@ -820,14 +961,18 @@ const handleUrlSubmit = () => {
       videoUrl.value = data.video_url
       videoPath.value = data.object_key || data.video_path || ''
       videoFile.value = null
+      mediaType.value = data.media_type === 'audio' ? 'audio' : 'video'
+      if (mediaType.value === 'audio' && activeRightTab.value === 'courseware') {
+        activeRightTab.value = 'transcript'
+      }
       report.value = ''
       analysisData.value = null
       transcriptData.value = []
       translatedTranscriptData.value = []
-      Message.success('视频解析成功')
+      Message.success(mediaType.value === 'audio' ? '音频解析成功' : '视频解析成功')
     })
     .catch((e) => {
-      Message.error(e?.message || '视频解析失败')
+      Message.error(e?.message || '解析失败')
     })
     .finally(() => {
       importingVideo.value = false
@@ -839,14 +984,139 @@ const formatTime = (seconds) => {
   return new Date(seconds * 1000).toISOString().substr(11, 8)
 }
 
+const formatClock = (seconds) => {
+  const s = Number(seconds || 0)
+  if (!Number.isFinite(s) || s <= 0) return '00:00'
+  const hh = Math.floor(s / 3600)
+  const mm = Math.floor((s % 3600) / 60)
+  const ss = Math.floor(s % 60)
+  const pad2 = (n) => String(n).padStart(2, '0')
+  if (hh > 0) return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`
+  return `${pad2(mm)}:${pad2(ss)}`
+}
+
 const handleTimeUpdate = (e) => {
   currentTime.value = e.target.currentTime
+}
+
+const audioCanPlay = computed(() => !!videoUrl.value)
+const audioSeekable = computed(() => Number.isFinite(audioDuration.value) && audioDuration.value > 0)
+
+const audioSeekPercent = computed(() => (audioSeekValue.value / 1000) * 100)
+
+const syncAudioSeekValue = () => {
+  if (!audioSeekable.value) {
+    audioSeekValue.value = 0
+    return
+  }
+  const ratio = audioDuration.value ? currentTime.value / audioDuration.value : 0
+  audioSeekValue.value = Math.round(Math.max(0, Math.min(1, ratio)) * 1000)
+}
+
+const handleAudioLoadedMetadata = (e) => {
+  const d = Number(e?.target?.duration)
+  audioDuration.value = Number.isFinite(d) && d > 0 ? d : 0
+  syncAudioSeekValue()
+}
+
+const handleAudioTimeUpdate = (e) => {
+  handleTimeUpdate(e)
+  if (!audioSeeking.value) syncAudioSeekValue()
+}
+
+const handleAudioPlay = () => {
+  audioPlaying.value = true
+  ensureTranslationOnPlay()
+}
+
+const handleAudioPause = () => {
+  audioPlaying.value = false
+}
+
+const handleAudioEnded = () => {
+  audioPlaying.value = false
+}
+
+const handleVideoPlay = () => {
+  ensureTranslationOnPlay()
+}
+
+let lastTranslateAttemptAt = 0
+
+const ensureTranslationOnPlay = async () => {
+  if (!bilingualEnabled.value) return
+  if (!transcriptData.value.length) return
+  if (translatedTranscriptData.value.length) return
+  if (translating.value) return
+
+  const now = Date.now()
+  if (now - lastTranslateAttemptAt < 8000) return
+  lastTranslateAttemptAt = now
+  await translateTranscripts()
+}
+
+const toggleAudioPlayback = async () => {
+  try {
+    await audioVizRef.value?.unlock?.()
+  } catch (e) {}
+  const el =
+    videoRef.value ||
+    document.querySelector(mediaType.value === 'audio' ? '.summary-audio-player' : '.summary-video-player')
+  if (!el) return
+  if (el.paused) {
+    try {
+      if (el.readyState === 0) el.load()
+    } catch (e) {}
+    try {
+      const p = el.play()
+      if (p && typeof p.then === 'function') await p
+    } catch (err) {
+      const msg = String(err?.message || err || '').trim()
+      Message.error(msg ? `播放失败：${msg}` : '播放失败')
+    }
+  } else {
+    el.pause()
+  }
+}
+
+const handleSeekPointerDown = () => {
+  audioSeeking.value = true
+}
+
+const handleSeekInput = (e) => {
+  const v = Number(e?.target?.value || 0) || 0
+  audioSeekValue.value = Math.max(0, Math.min(1000, v))
+  if (!audioSeekable.value) return
+  currentTime.value = (audioSeekValue.value / 1000) * audioDuration.value
+}
+
+const handleSeekChange = () => {
+  const el = videoRef.value
+  audioSeeking.value = false
+  if (!el || !audioSeekable.value) return
+  el.currentTime = (audioSeekValue.value / 1000) * audioDuration.value
+}
+
+watch([videoUrl, mediaType], () => {
+  audioDuration.value = 0
+  audioPlaying.value = false
+  audioSeeking.value = false
+  audioSeekValue.value = 0
+})
+
+const handleAudioError = (e) => {
+  audioPlaying.value = false
+  const mediaError = e?.target?.error
+  const code = mediaError?.code
+  const msg = code ? `音频加载失败（code ${code}）` : '音频加载失败'
+  Message.error(msg)
 }
 
 const jumpToTime = (seconds) => {
   let videoEl = videoRef.value
   if (!videoEl) {
     videoEl = document.querySelector('.summary-video-player')
+    if (!videoEl) videoEl = document.querySelector('.summary-audio-player')
   }
 
   if (videoEl) {
@@ -913,6 +1183,102 @@ const buildConfig = () => ({
   capture_offset: configStore.capture_offset,
 })
 
+const loadFromMd5 = async (md5) => {
+  const v = String(md5 || '').trim().toLowerCase()
+  if (!v) return
+  try {
+    const res = await fetch(`${backendBaseUrl.value}/analysis/by_md5/${encodeURIComponent(v)}`)
+    if (!res.ok) {
+      const txt = await res.text()
+      throw new Error(txt || 'Load failed')
+    }
+    const payload = await res.json()
+    console.log('Loaded artifacts payload:', payload)
+    const artifacts = payload.artifacts || {}
+    const pick = (type) => (Array.isArray(artifacts[type]) && artifacts[type].length ? artifacts[type][0] : null)
+
+    videoMd5.value = payload?.asset?.md5 || v
+    videoUrl.value = payload?.access?.primary_url || ''
+    videoPath.value = payload?.asset?.source_ref || ''
+
+    const analysis = pick('ai_analysis')?.json || null
+    const reportText = pick('report_markdown')?.text || ''
+    analysisData.value = analysis
+    report.value = reportText
+
+    const mt = String(payload?.asset?.media_type || analysis?.media_type || '').trim()
+    if (mt === 'audio') {
+      mediaType.value = 'audio'
+      if (activeRightTab.value === 'courseware') activeRightTab.value = 'transcript'
+    } else if (mt === 'video') {
+      mediaType.value = 'video'
+    }
+
+    const subtitleLines = pick('subtitle_lines')?.json?.lines
+    if (Array.isArray(subtitleLines) && subtitleLines.length) {
+      transcriptData.value = subtitleLines.map((x) => ({ timestamp: x.timestamp, text: x.text }))
+    } else if (analysis?.raw_transcript) {
+      const lines = String(analysis.raw_transcript || '').split('\n')
+      transcriptData.value = lines
+        .map(line => {
+          const match = line.match(/^\[(\d+(?:\.\d+)?)s\]\s*(.*)$/)
+          if (match) {
+            return { timestamp: parseFloat(match[1]), text: match[2] }
+          }
+          return null
+        })
+        .filter(Boolean)
+    } else {
+      transcriptData.value = []
+    }
+
+    const transEn = pick('subtitle_translation_en')?.json?.lines
+    if (Array.isArray(transEn) && transEn.length) {
+      translatedTranscriptData.value = transEn.map((x) => ({ timestamp: x.timestamp, text: x.text }))
+    } else {
+      translatedTranscriptData.value = []
+    }
+
+    const mm = pick('mindmap_g6')?.json
+    mindmapData.value = mm || null
+
+    const notes = pick('notes_markdown')?.text
+    notesData.value = notes || ''
+
+    // 尝试加载 captured_frames (新逻辑: 列表存在单个 artifact 中) 或 captured_frame (旧逻辑: 多个 artifacts)
+    let framesData = []
+    const framesArtifact = pick('captured_frames')
+    if (framesArtifact && Array.isArray(framesArtifact.json)) {
+      framesData = framesArtifact.json
+    } else if (Array.isArray(artifacts.captured_frame)) {
+      framesData = artifacts.captured_frame.map(x => x?.json)
+    }
+
+    if (framesData.length) {
+      coursewareData.value = framesData
+        .filter(Boolean)
+        .map((x) => ({ url: x.url, timestamp: x.timestamp, object_key: x.object_key }))
+    }
+
+    const lastChat = pick('chat_session')?.json
+    if (lastChat && Array.isArray(lastChat.messages) && lastChat.messages.length) {
+      chatMessages.value = lastChat.messages
+    }
+
+    Message.success('已从 md5 加载')
+  } catch (e) {
+    Message.error(e.message || 'Load failed')
+  }
+}
+
+watch(
+  () => route.query.md5,
+  (md5) => {
+    if (md5) loadFromMd5(md5)
+  },
+  { immediate: true }
+)
+
 const readSseResponse = async (response) => {
   if (!response.body) throw new Error('ReadableStream not supported')
 
@@ -949,6 +1315,12 @@ const readSseResponse = async (response) => {
         } else if (data.status === 'success') {
           report.value = data.report
           analysisData.value = data.data
+          if (analysisData.value?.media_type === 'audio') {
+            mediaType.value = 'audio'
+            if (activeRightTab.value === 'courseware') activeRightTab.value = 'transcript'
+          } else if (analysisData.value?.media_type === 'video') {
+            mediaType.value = 'video'
+          }
           if (analysisData.value.segments && Array.isArray(analysisData.value.segments)) {
             analysisData.value.segments.sort((a, b) => a.timestamp - b.timestamp)
           }
@@ -956,6 +1328,7 @@ const readSseResponse = async (response) => {
             videoUrl.value = data.video_url
           }
           videoPath.value = data.object_key || data.video_path || ''
+          if (data.video_md5) videoMd5.value = String(data.video_md5 || '').trim().toLowerCase()
 
           if (data.data.raw_transcript) {
             const lines = data.data.raw_transcript.split('\n')
@@ -1066,6 +1439,10 @@ const scrollChatToBottom = () => {
   }
 }
 
+const handleDeleteMessage = (index) => {
+  chatMessages.value.splice(index, 1)
+}
+
 const handleChatSend = async () => {
   const content = chatInput.value.trim()
   if (!content) return
@@ -1159,6 +1536,7 @@ const handleChatSend = async () => {
         transcript: getTranscriptContext(),
         summary: getSummaryContext(),
         config: buildConfig(),
+        video_md5: videoMd5.value || '',
       }))
     }
 
@@ -1266,6 +1644,7 @@ const translateTranscripts = async () => {
       body: JSON.stringify({
         lines: transcriptData.value,
         config: buildConfig(),
+        video_md5: videoMd5.value || '',
       }),
     })
 
@@ -1311,12 +1690,17 @@ const toggleBilingual = async () => {
 
 watch(transcriptData, () => {
   translatedTranscriptData.value = []
+  lastTranslateAttemptAt = 0
   if (bilingualEnabled.value) {
     translateTranscripts()
   }
 })
 
 const handleCaptureFrame = async () => {
+  if (mediaType.value === 'audio') {
+    Message.warning('音频不支持截取当前帧')
+    return
+  }
   if (!videoPath.value) {
     Message.warning('请先上传并分析视频')
     return
@@ -1337,6 +1721,7 @@ const handleCaptureFrame = async () => {
       body: JSON.stringify({
         video_filename: videoPath.value,
         timestamp: currentTime,
+        video_md5: videoMd5.value || '',
       }),
     })
     
@@ -1346,11 +1731,13 @@ const handleCaptureFrame = async () => {
     }
     
     const data = await response.json()
+    if (data.video_md5 && !videoMd5.value) videoMd5.value = String(data.video_md5 || '').trim().toLowerCase()
     // Add to existing list instead of replacing
     if (!coursewareData.value) coursewareData.value = []
     coursewareData.value.push({
       url: data.url,
-      timestamp: data.timestamp
+      timestamp: data.timestamp,
+      object_key: data.object_key
     })
     
     // Switch to courseware tab to show result
@@ -1369,7 +1756,7 @@ const handleSubmit = async () => {
   const hasUploadFile = !!videoFile.value
   const hasImportedPath = !!videoPath.value
   if (!hasUploadFile && !hasImportedPath) {
-    Message.warning('请先选择视频或输入链接解析视频')
+    Message.warning('请先选择视频/音频或输入链接解析')
     return
   }
   
@@ -1516,12 +1903,14 @@ const handleSubmit = async () => {
 
 .video-wrapper {
   background-color: var(--media-bg);
-  border-radius: 12px;
+  border-radius: 5px;
   aspect-ratio: 16/9;
   overflow: hidden;
   position: relative;
   flex-shrink: 0;
   margin-bottom: 16px;
+  border: 3px solid #323232;
+  box-shadow: 5px 5px #323232;
 }
 
 .video-overlay {
@@ -1541,6 +1930,185 @@ const handleSubmit = async () => {
 .summary-video-player {
   width: 100%;
   height: 100%;
+}
+
+.audio-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background-image: url('../assert/bg2.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.audio-center-wave {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  width: min(520px, 70%);
+  aspect-ratio: 1 / 1;
+  border-radius: var(--border-radius-circle);
+  overflow: hidden;
+  z-index: 2;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--color-fill-2) 55%, transparent) 0%, transparent 70%);
+  border: 1px solid var(--color-border-2);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+}
+
+.summary-audio-player {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.summary-audio-controls {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  height: 20px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--border-radius-large);
+  border: 0;
+  background: var(--color-bg-5);
+  background: color-mix(in srgb, var(--color-bg-5) 62%, transparent);
+  backdrop-filter: blur(0px);
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.38);
+}
+
+.audio-ctrl-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--border-radius-circle);
+  border: 1px solid var(--color-border-2);
+  background: var(--color-fill-2);
+  background: color-mix(in srgb, var(--color-fill-2) 72%, transparent);
+  color: var(--color-text-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.audio-ctrl-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.audio-ctrl-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  background: var(--color-fill-3);
+  background: color-mix(in srgb, var(--color-fill-3) 78%, transparent);
+  border-color: var(--primary-6);
+}
+
+.audio-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--color-text-2);
+  width: 52px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.audio-progress-wrap {
+  position: relative;
+  flex: 1;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.audio-progress {
+  width: 100%;
+  height: 10px;
+  border-radius: var(--border-radius-circle);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--primary-6) 88%, transparent) 0%,
+    color-mix(in srgb, var(--primary-6) 88%, transparent) var(--progress),
+    var(--color-fill-3) var(--progress),
+    var(--color-fill-3) 100%
+  );
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid var(--color-border-2);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35);
+  z-index: 1;
+}
+
+.audio-progress:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.audio-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--border-radius-circle);
+  background: var(--primary-6);
+  border: 2px solid var(--color-bg-white);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.audio-progress::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--border-radius-circle);
+  background: var(--primary-6);
+  border: 2px solid var(--color-bg-white);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.audio-progress::-moz-range-track {
+  height: 10px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.video-drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed rgba(255, 255, 255, 0.65);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.video-drag-overlay-inner {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.video-drag-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.video-drag-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .video-placeholder {
@@ -2031,6 +2599,9 @@ const handleSubmit = async () => {
 
 .chat-message-list {
   padding-bottom: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
 }
 
 .segments-list {
@@ -2159,7 +2730,7 @@ const handleSubmit = async () => {
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 32px;
 }
 
 .chat-message {
@@ -2274,30 +2845,74 @@ const handleSubmit = async () => {
   max-width: 80%;
 }
 
+.chat-bubble-wrapper {
+  position: relative;
+  display: flex;
+  max-width: 88%;
+  overflow: visible;
+}
+
+.chat-bubble-container {
+  position: relative;
+  overflow: visible;
+}
+
+.chat-delete-btn {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  width: 24px;
+  height: 24px;
+  background: #fff;
+  border: 2px solid #323232;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 1;
+  transition: all 0.2s;
+  z-index: 100;
+  box-shadow: 2px 2px #323232;
+  color: #323232;
+}
+  
+  .chat-bubble-wrapper:hover .chat-delete-btn,
+  .chat-bubble-container:hover .chat-delete-btn {
+    opacity: 1;
+  }
+
+.chat-delete-btn:hover {
+  transform: scale(1.1);
+  background: #ffebeb;
+  color: #f53f3f;
+}
+
 /* Chat Bubbles */
 .chat-bubble {
   max-width: 100%;
   padding: 14px 18px;
-  border-radius: 12px;
-  background: var(--surface-0);
-  color: var(--text-main);
-  border: 1px solid var(--card-border);
+  border-radius: 5px;
+  background: #fff;
+  color: #1a1a1a;
+  border: 3px solid #323232;
   line-height: 1.7;
   white-space: pre-wrap;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: 5px 5px #323232;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
 
 .chat-message.assistant .chat-bubble {
-  border-radius: 4px 16px 16px 16px;
-  background-color: var(--surface-0);
+  border-radius: 5px;
+  background-color: #fff;
 }
 
 .chat-message.user .chat-bubble {
-  border-radius: 16px 4px 16px 16px;
-  background: var(--surface-1);
-  color: var(--text-main);
-  border: 1px solid var(--card-border);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  border-radius: 5px;
+  background: #fff;
+  color: #1a1a1a;
+  border: 3px solid #323232;
+  box-shadow: 5px 5px #323232;
 }
 
 /* Markdown Styles inside Bubble */
@@ -2556,6 +3171,11 @@ const handleSubmit = async () => {
   border-top: 1px solid var(--card-border);
   color: var(--text-sub);
   font-size: 13px;
+}
+
+.courseware-info .info-right {
+  display: flex;
+  gap: 4px;
 }
 
 .courseware-info .info-left {

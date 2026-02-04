@@ -1,10 +1,13 @@
 import os
 import tempfile
 import uuid
+import mimetypes
+from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, HTTPException, Request as FastAPIRequest
 
-from .core import guess_platform_from_url, normalize_proxy_url, public_base_url, sanitize_filename
+from .core import guess_platform_from_url, normalize_proxy_url, public_base_url, sanitize_stem
 from .minio_store import minio_enabled, minio_object_key, minio_upload_file
 from .models import ImportVideoUrlRequest
 
@@ -14,6 +17,92 @@ except Exception:
     yt_dlp = None
 
 router = APIRouter()
+
+
+def _looks_like_direct_media_url(url: str) -> str:
+    u = (url or "").strip()
+    try:
+        parsed = urlparse(u)
+    except Exception:
+        return ""
+    if parsed.scheme not in ("http", "https"):
+        return ""
+
+    path = unquote(parsed.path or "").lower()
+    video_exts = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v")
+    audio_exts = (".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus")
+    if path.endswith(video_exts):
+        return "video"
+    if path.endswith(audio_exts):
+        return "audio"
+
+    try:
+        req = Request(u, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=10) as resp:
+            ct = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ct.startswith("video/"):
+                return "video"
+            if ct.startswith("audio/"):
+                return "audio"
+    except Exception:
+        pass
+
+    return ""
+
+
+def _download_direct_media(url: str, job_dir: str, kind: str) -> tuple[str, str, str]:
+    os.makedirs(job_dir, exist_ok=True)
+    parsed = urlparse(url)
+    base = os.path.basename(unquote(parsed.path or "")) or "video.mp4"
+    if len(base) > 120:
+        base = base[-120:]
+
+    name_no_q = base.split("?", 1)[0].split("#", 1)[0].strip()
+    if not name_no_q:
+        name_no_q = "media"
+
+    title = os.path.splitext(name_no_q)[0] or "media"
+    url_ext = os.path.splitext(name_no_q)[1].strip().lower()
+    allow_video_ext = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v"}
+    allow_audio_ext = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}
+
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    content_type = "video/mp4" if kind == "video" else "audio/mpeg"
+    with urlopen(req, timeout=30) as resp:
+        ct = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if (kind == "video" and ct.startswith("video/")) or (kind == "audio" and ct.startswith("audio/")):
+            content_type = ct
+        ext_map = {
+            "video/webm": ".webm",
+            "video/x-matroska": ".mkv",
+            "video/quicktime": ".mov",
+            "video/x-msvideo": ".avi",
+            "video/x-flv": ".flv",
+            "video/mp4": ".mp4",
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "audio/flac": ".flac",
+            "audio/aac": ".aac",
+            "audio/ogg": ".ogg",
+            "audio/opus": ".opus",
+            "audio/mp4": ".m4a",
+            "audio/x-m4a": ".m4a",
+        }
+        allow_ext = allow_video_ext if kind == "video" else allow_audio_ext
+        fallback_ext = ".mp4" if kind == "video" else ".mp3"
+        ext = url_ext if url_ext in allow_ext else ext_map.get(content_type, fallback_ext)
+        filename = sanitize_stem(title) + ext
+        out_path = os.path.join(job_dir, filename)
+        with open(out_path, "wb") as f:
+            while True:
+                chunk = resp.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+    return out_path, title, content_type
 
 
 def _yt_dlp_download(url: str, job_dir: str) -> tuple[str, str]:
@@ -117,21 +206,41 @@ def import_video_from_url(url: str) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="leader-yt-") as job_dir:
         try:
-            downloaded_path, yt_title = _yt_dlp_download(url, job_dir)
-            title = yt_title
-            filename = sanitize_filename(title)
-            output_path = os.path.join(job_dir, filename)
-            if os.path.abspath(downloaded_path) != os.path.abspath(output_path):
-                os.replace(downloaded_path, output_path)
+            content_type = "video/mp4"
+            media_type = "video"
+            direct_kind = _looks_like_direct_media_url(url)
+            if direct_kind:
+                media_type = direct_kind
+                output_path, title, content_type = _download_direct_media(url, job_dir, direct_kind)
+                filename = os.path.basename(output_path)
+            else:
+                downloaded_path, yt_title = _yt_dlp_download(url, job_dir)
+                title = yt_title
+                ext = os.path.splitext(downloaded_path)[1].strip().lower()
+                if ext:
+                    audio_exts = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}
+                    video_exts = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v"}
+                    if ext in audio_exts:
+                        media_type = "audio"
+                    elif ext in video_exts:
+                        media_type = "video"
+                filename = sanitize_stem(title) + (ext or ".mp4")
+                output_path = os.path.join(job_dir, filename)
+                if os.path.abspath(downloaded_path) != os.path.abspath(output_path):
+                    os.replace(downloaded_path, output_path)
+
+                guessed = mimetypes.guess_type(output_path)[0] or ""
+                if guessed:
+                    content_type = guessed
         except Exception as e:
             proxy = normalize_proxy_url(os.getenv("YTDLP_PROXY", "") or os.getenv("YT_DLP_PROXY", ""))
             hint = ""
             if platform == "youtube" and not proxy:
                 hint = "（YouTube 可能需要代理，可在 .env 配置 YTDLP_PROXY=http://127.0.0.1:7897）"
-            raise RuntimeError(f"yt-dlp 解析失败: {e}{hint}") from e
+            raise RuntimeError(f"URL 导入失败: {e}{hint}") from e
 
         video_object_key = minio_object_key("uploads", job_id, filename)
-        minio_video_url = minio_upload_file(output_path, video_object_key, content_type="video/mp4")
+        minio_video_url = minio_upload_file(output_path, video_object_key, content_type=content_type)
         return {
             "job_id": job_id,
             "filename": filename,
@@ -141,7 +250,9 @@ def import_video_from_url(url: str) -> dict:
             "platform": platform,
             "source_url": source_url,
             "object_key": video_object_key,
+            "media_type": media_type,
         }
+
 
 
 @router.post("/import_video_url")
@@ -160,4 +271,3 @@ async def import_video_url(req: FastAPIRequest, request: ImportVideoUrlRequest):
 
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
