@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Bilibili AI Analysis",
+  "version": "1.0",
+  "description": "Add AI Analysis button to Bilibili videos",
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "*://*.bilibili.com/*",
+    "http://localhost:18000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "icons": {
+    "48": "icon.png"
+  }
+}

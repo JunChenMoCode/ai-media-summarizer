@@ -47,15 +47,22 @@ async def capture_frame(req: FastAPIRequest, request: CaptureRequest):
     if not minio_enabled():
         raise HTTPException(status_code=404, detail="Video file not found")
 
-    video_object_key = normalize_video_object_key(rel_video_path)
-    if not minio_object_exists(video_object_key):
-        raise HTTPException(status_code=404, detail="Video file not found")
+    # Check if it is a remote URL
+    if rel_video_path.startswith("http://") or rel_video_path.startswith("https://"):
+         video_source = rel_video_path
+         video_md5 = (request.video_md5 or "").strip().lower()
+         job_id = str(uuid.uuid4())
+         # For URL, we don't check minio existence
+    else:
+        video_object_key = normalize_video_object_key(rel_video_path)
+        if not minio_object_exists(video_object_key):
+            raise HTTPException(status_code=404, detail="Video file not found")
 
-    job_id = extract_job_id_from_object_key(video_object_key) or str(uuid.uuid4())
-    video_source = minio_presigned_url(video_object_key)
-    video_md5 = (request.video_md5 or "").strip().lower()
-    if not video_md5:
-        video_md5 = minio_object_etag_md5(video_object_key)
+        job_id = extract_job_id_from_object_key(video_object_key) or str(uuid.uuid4())
+        video_source = minio_presigned_url(video_object_key)
+        video_md5 = (request.video_md5 or "").strip().lower()
+        if not video_md5:
+            video_md5 = minio_object_etag_md5(video_object_key)
 
     with tempfile.TemporaryDirectory(prefix="leader-cap-") as temp_out:
         output_dir = os.path.join(temp_out, job_id)

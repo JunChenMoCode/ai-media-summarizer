@@ -2,7 +2,7 @@
   <div class="video-list-page">
     <div class="page-header">
       <div class="header-left">
-        <div class="title">已分析资源</div>
+        <div class="title">分析列表</div>
         <div class="subtitle">点击卡片打开分析结果</div>
       </div>
       <div class="header-right">
@@ -45,6 +45,9 @@
               {{ getFormatLabel(item) }}
             </div>
 
+            <!-- Unread Dot -->
+            <div v-if="!item.is_read" class="unread-dot"></div>
+
             <!-- Cover Image or Placeholder -->
             <div 
               v-if="getCoverUrl(item)" 
@@ -69,7 +72,18 @@
                 {{ item.content_json?.title || item.display_name || item.md5 }}
               </div>
               <div class="info-desc" :title="item.content_json?.summary">
-                {{ item.content_json?.summary || '暂无视频摘要' }}
+                {{ item.content_json?.summary || '暂无摘要' }}
+              </div>
+              
+              <!-- Tags Section -->
+              <div v-if="item.content_json?.tags && item.content_json.tags.length" class="tags-container">
+                <span v-for="(tag, idx) in item.content_json.tags.slice(0, 3)" :key="idx" class="tag-badge">
+                  #{{ tag }}
+                </span>
+              </div>
+
+              <div class="info-meta">
+                {{ formatTime(item.created_at) }}
               </div>
             </div>
           </div>
@@ -137,10 +151,27 @@ const filteredItems = computed(() => {
   })
 })
 
-const openItem = (item) => {
+const openItem = async (item) => {
   const md5 = norm(item?.md5)
   if (!md5) return
-  router.push({ name: 'AiVideoSummary', query: { md5 } })
+
+  // Mark as read locally first for instant feedback
+  if (!item.is_read) {
+    item.is_read = true
+    // Call API to mark as read
+    try {
+      await fetch(`${backendBaseUrl.value}/analysis/${md5}/read`, { method: 'POST' })
+    } catch (e) {
+      console.error('Failed to mark as read', e)
+    }
+  }
+  
+  const at = String(item.asset_type || '').trim().toLowerCase()
+  if (at === 'document' || at === 'file') {
+    router.push({ name: 'AiFileSummary', query: { md5 } })
+  } else {
+    router.push({ name: 'AiVideoSummary', query: { md5 } })
+  }
 }
 
 const shortMd5 = (md5) => {
@@ -174,6 +205,19 @@ const copyMd5 = async (md5) => {
   } catch (e) {
     Message.error('复制失败')
   }
+}
+
+const formatTime = (ts) => {
+  if (!ts) return ''
+  // If timestamp is string, try to parse
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ts
+  return d.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 const getCoverUrl = (item) => {
@@ -210,11 +254,28 @@ const getCoverUrl = (item) => {
 }
 
 const getFormatLabel = (item) => {
+  // Fix for plugin/extension items (Bilibili/YouTube) showing as TXT
+  // If it comes from a URL source (plugin uses URL), and it's not explicitly audio/doc, treat as MP4
+  const sk = String(item.source_kind || '').toLowerCase()
+  const ref = String(item.source_ref || '').toLowerCase()
+  
+  if (sk === 'url' || ref.includes('bilibili.com') || ref.includes('youtube.com') || ref.includes('youtu.be')) {
+      if (item.media_type === 'audio') return 'MP3'
+      // If it's a video or unknown, default to MP4 for plugin items
+      return 'MP4'
+  }
+
   if (item.mime_type) {
+    const mt = item.mime_type.toLowerCase()
+    if (mt.includes('pdf')) return 'PDF'
+    if (mt.includes('word') || mt.includes('document')) return 'DOCX'
+    if (mt.includes('powerpoint') || mt.includes('presentation')) return 'PPTX'
+    if (mt.includes('text') || mt.includes('plain')) return 'TXT'
+    if (mt.includes('markdown')) return 'MD'
+    
     // e.g. "video/mp4" -> "MP4"
     const parts = item.mime_type.split('/')
     if (parts.length > 1) {
-       // Special case handling if needed
        return parts[1].toUpperCase()
     }
     return item.mime_type.toUpperCase()
@@ -260,6 +321,25 @@ onMounted(() => {
   padding: 24px;
   min-height: 100vh;
   background: transparent;
+}
+
+.unread-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 10px;
+  height: 10px;
+  background-color: #f53f3f;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.info-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
 }
 
 .page-header {
@@ -416,6 +496,23 @@ onMounted(() => {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tag-badge {
+  font-size: 11px;
+  background-color: #f2f3f5;
+  color: #1d2129;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  border: 1px solid #e5e6eb;
 }
 
 .empty-state {

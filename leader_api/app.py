@@ -12,7 +12,23 @@ from .minio_routes import router as minio_router
 from .ocr import router as ocr_router
 from .translate_routes import router as translate_router
 from .video import router as video_router
+from .file_routes import router as file_router
+from .tasks_routes import router as tasks_router
+from .task_worker import worker_loop
+import asyncio
+from contextlib import asynccontextmanager
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Run worker
+    task = asyncio.create_task(worker_loop())
+    yield
+    # Shutdown: Cancel worker
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 def create_app() -> FastAPI:
     """
@@ -24,7 +40,7 @@ def create_app() -> FastAPI:
     """
     bootstrap_env()
 
-    app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
 
     # 允许跨域：当前前端与后端可能在不同端口运行（vite dev server + uvicorn）
     app.add_middleware(
@@ -43,6 +59,8 @@ def create_app() -> FastAPI:
     # 路由按模块拆分，每个模块只关注自己的职责
     app.include_router(minio_router)
     app.include_router(video_router)
+    app.include_router(file_router)
+    app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
     app.include_router(analyze_router)
     app.include_router(translate_router)
     app.include_router(ocr_router)

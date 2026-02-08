@@ -3,6 +3,9 @@
 这是一个“音频直提 + ASR 加速 + LLM 分段 + 按需并行截图”的视频总结工具，提供 **FastAPI 后端** + **Vue3 前端** 的交互式 Web 界面，支持：
 
 - 🎥 上传本地视频（直传 MinIO）或粘贴 URL 导入（yt-dlp）
+- 📄 **(New)** AI 文件总结：支持上传文档进行智能分析与总结
+- 🧩 **(New)** Bilibili 浏览器扩展：一键提取 B 站视频内容
+- 📋 **(New)** 异步任务管理：支持后台任务队列与状态追踪
 - 🧠 一键生成摘要/图文详解、思维导图、文稿笔记
 - 🌍 双语字幕翻译与双字幕展示
 - 📚 课件截图与 OCR（支持 VL 模型远程 OCR 或本地 Tesseract）
@@ -13,14 +16,19 @@
 - 后端实现：`leader_api/`（按职责拆分）
   - `leader_api/app.py`：应用创建与路由注册
   - `leader_api/minio_store.py`：MinIO 访问封装
+  - `leader_api/mysql_store.py`：MySQL 数据库访问
+  - `leader_api/task_store.py` & `task_worker.py`：异步任务管理与执行
   - `leader_api/minio_routes.py`：直传 MinIO 的 presign 接口
   - `leader_api/video.py`：URL 导入视频（yt-dlp）
   - `leader_api/analyze.py`：视频分析（流式输出进度）
+  - `leader_api/file_routes.py`：文件处理与总结接口
+  - `leader_api/tasks_routes.py`：任务管理接口
   - `leader_api/capture.py`：按时间点截图
   - `leader_api/ocr.py`：Tesseract/VL OCR
   - `leader_api/translate_routes.py`：字幕翻译
   - `leader_api/llm_routes.py`：聊天/思维导图/笔记
 - 前端：`frontend-vue/`（Vite + Vue3 + Arco）
+- 扩展：`bilibili-extension/`（Chrome 浏览器插件）
 
 ## 💾 存储策略（重要）
 
@@ -36,6 +44,8 @@
 - 📦 Node.js（用于前端，建议 18+）
 - 🎬 FFmpeg（用于音频抽取/视频处理）
 - 🗄️ MinIO（必须，用于视频与产物存储）
+- 🐬 MySQL（可选，用于任务持久化存储）
+- 🐳 Docker & Docker Compose（可选，用于容器化部署）
 - 👁️ 可选：Tesseract OCR（仅当选择 “Tesseract (Local)” 作为 OCR 引擎）
 
 ## ⚡ 快速开始（本地开发）

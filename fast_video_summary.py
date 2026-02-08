@@ -248,10 +248,12 @@ class FastVideoAnalyzer:
             "   - title: 环节标题。\n"
             "   - points: 3-5个关于该段内容的详细逻辑要点（如状态描述、变化过程、解决方案等）。\n"
             "3. 知识小结表：提取视频中的核心知识点，以列表形式返回，包含知识点名称、核心内容、学习/应用重点、难度系数（用星星表示，如 ⭐⭐）。\n"
+            "4. 关键标签：提取视频的3个核心关键词或分类标签。\n"
             "请严格以 JSON 格式输出，格式如下：\n"
             "{\n"
             '  "title": "视频课程标题",\n'
             '  "summary": "全视频的总体摘要",\n'
+            '  "tags": ["标签1", "标签2", "标签3"],\n'
             '  "segments": [\n'
             '    {"timestamp": 12.5, "title": "段落标题", "points": ["要点1", "要点2"]}\n'
             '  ],\n'
@@ -441,6 +443,19 @@ class FastVideoAnalyzer:
             t1 = time.time()
             transcript = self.fast_transcribe(audio_path)
             self.log(f"   [耗时] ASR 转录: {time.time() - t1:.2f} 秒")
+            
+            if not transcript or not transcript.strip():
+                self.log("❌ 未检测到有效字幕，停止分析")
+                has_video = self.has_video_stream()
+                return {
+                    "title": "未检测到字幕",
+                    "summary": "视频中未检测到有效语音或字幕。",
+                    "segments": [],
+                    "knowledge_table": [],
+                    "raw_transcript": "",
+                    "media_type": "video" if has_video else "audio",
+                    "no_subtitles": True
+                }
             
             # 3. AI 规划分段 (核心逻辑)
             t2 = time.time()

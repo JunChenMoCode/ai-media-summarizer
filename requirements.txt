@@ -12,3 +12,6 @@ sentencepiece
 minio
 yt-dlp
 cryptography
+pypdf
+python-docx
+python-pptx

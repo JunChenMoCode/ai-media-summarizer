@@ -78,7 +78,8 @@ import {
   IconExport,
   IconSearch,
   IconSunFill,
-  IconMoonFill
+  IconMoonFill,
+  IconList
 } from '@arco-design/web-vue/es/icon'
 
 const route = useRoute()
@@ -87,7 +88,8 @@ const configStore = useConfigStore()
 
 const navItems = [
   { key: 'Dashboard', icon: IconHome, label: '仪表盘' },
-  { key: 'Video', icon: IconPlayCircle, label: '视频分析' },
+  { key: 'Video', icon: IconPlayCircle, label: '分析列表' },
+  { key: 'TaskList', icon: IconList, label: '任务列表' },
   { key: 'Analytics', icon: IconBarChart, label: '数据统计' },
   { key: 'History', icon: IconHistory, label: '历史记录' },
   { key: 'Settings', icon: IconSettings, label: '系统设置' },
@@ -97,6 +99,7 @@ const selectedKey = computed(() => {
   if (route.name === 'Dashboard') return 'Dashboard'
   if (route.name === 'Settings') return 'Settings'
   if (route.name === 'AiVideoSummary') return 'Video'
+  if (route.name === 'TaskList') return 'TaskList'
   return route.name
 })
 
@@ -113,6 +116,8 @@ const handleMenuClick = (key) => {
     router.push('/')
   } else if (key === 'Video') {
     router.push('/video')
+  } else if (key === 'TaskList') {
+    router.push('/tasks')
   } else if (key === 'Settings') {
     router.push('/settings')
   }
@@ -239,6 +244,23 @@ watchEffect(() => {
   background-color: var(--primary-6);
   color: #fff;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--primary-6), transparent 70%);
+}
+
+/* Light Theme Optimization */
+[data-theme='light'] .nav-item.active {
+  background-color: var(--color-fill-2) !important;
+  color: #722ed1 !important; /* Purple icon */
+  box-shadow: none !important;
+}
+
+[data-theme='light'] .nav-item.active > :deep(svg) {
+  stroke-width: 2.5px; /* Thicker stroke for better visibility */
+  filter: drop-shadow(0 1px 2px rgba(114, 46, 209, 0.2)); /* Purple shadow */
+}
+
+/* Dark Theme specific adjustments if needed */
+[data-theme='dark'] .nav-item.active {
+  color: #fff;
 }
 
 .nav-item.active > :deep(svg),

@@ -80,6 +80,8 @@ def _migrate_schema(conn) -> None:
         alters.append("ALTER TABLE media_assets ADD COLUMN mime_type VARCHAR(128) NULL AFTER asset_type")
     if not _column_exists(conn, "media_assets", "display_name"):
         alters.append("ALTER TABLE media_assets ADD COLUMN display_name VARCHAR(255) NULL AFTER mime_type")
+    if not _column_exists(conn, "media_assets", "is_read"):
+        alters.append("ALTER TABLE media_assets ADD COLUMN is_read TINYINT(1) NOT NULL DEFAULT 0 AFTER display_name")
 
     if not _column_exists(conn, "media_artifacts", "meta_json"):
         alters.append("ALTER TABLE media_artifacts ADD COLUMN meta_json JSON NULL AFTER content_json")
@@ -107,6 +109,7 @@ def mysql_init() -> None:
           asset_type VARCHAR(32) NOT NULL DEFAULT '',
           mime_type VARCHAR(128) NULL,
           display_name VARCHAR(255) NULL,
+          is_read TINYINT(1) NOT NULL DEFAULT 0,
           media_type VARCHAR(16) NOT NULL DEFAULT '',
           source_kind VARCHAR(16) NOT NULL DEFAULT '',
           source_ref VARCHAR(1024) NULL,
@@ -455,6 +458,26 @@ def load_latest_by_md5(video_md5: str) -> dict | None:
     }
 
 
+def mark_asset_as_read(video_md5: str) -> bool:
+    if not mysql_enabled():
+        return False
+    
+    mysql_init()
+    md5 = (video_md5 or "").strip().lower()
+    if not md5:
+        return False
+
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("UPDATE media_assets SET is_read = 1 WHERE md5 = :md5"),
+            {"md5": md5}
+        )
+        return result.rowcount > 0
+
+
 def list_assets_with_artifact(
     *,
     artifact_type: str = "ai_analysis",
@@ -484,6 +507,7 @@ def list_assets_with_artifact(
                   a.asset_type,
                   a.mime_type,
                   a.display_name,
+                  a.is_read,
                   a.media_type,
                   a.source_kind,
                   a.source_ref,
@@ -523,6 +547,7 @@ def list_assets_with_artifact(
                 "asset_type": r.get("asset_type", ""),
                 "mime_type": r.get("mime_type"),
                 "display_name": r.get("display_name"),
+                "is_read": bool(r.get("is_read") or 0),
                 "media_type": r.get("media_type", ""),
                 "source_kind": r.get("source_kind", ""),
                 "source_ref": r.get("source_ref"),

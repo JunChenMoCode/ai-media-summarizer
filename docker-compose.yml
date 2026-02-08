@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # 1. 前端 (Vue3 + Nginx)
+  frontend:
+    build:
+      context: ./frontend-vue
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - leader-net
+
+  # 2. 后端 (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./model:/app/model  # 挂载模型目录，避免重复下载
+      - ./fast_output:/app/fast_output # 挂载输出目录
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_PUBLIC_BASE_URL=http://localhost:9000 # 浏览器访问地址
+      # 其他环境变量请在 .env 中配置，或者在这里覆盖
+    env_file:
+      - .env
+    depends_on:
+      - mysql
+      - minio
+    networks:
+      - leader-net
+
+  # 3. 数据库 (MySQL)
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: zongjie
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - leader-net
+
+  # 4. 对象存储 (MinIO)
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # API 端口
+      - "9001:9001" # 控制台端口
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    networks:
+      - leader-net
+
+networks:
+  leader-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  minio_data:

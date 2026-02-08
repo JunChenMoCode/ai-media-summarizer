@@ -186,14 +186,15 @@ def normalize_video_object_key(video_ref: str) -> str:
     """
     将前端传来的 video_path 规范成 MinIO object_key。
 
-    兼容两种输入：
+    兼容多种输入：
     - uploads/<job_id>/<filename>（已经是完整 key）
+    - outputs/<job_id>/<filename>（任务产物 key）
     - <job_id>/<filename>（自动补 uploads/ 前缀）
     """
     ref = (video_ref or "").replace("\\", "/").lstrip("/")
     if not ref:
         return ""
-    if ref.startswith("uploads/"):
+    if ref.startswith("uploads/") or ref.startswith("outputs/"):
         return ref
     return minio_object_key("uploads", ref)
 

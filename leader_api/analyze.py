@@ -180,20 +180,25 @@ async def analyze_video_by_path(req: FastAPIRequest, request: AnalyzePathRequest
                     yield json.dumps({"status": "error", "message": "分析失败，无法生成报告"}) + "\n"
                     return
 
-                report_path = os.path.join(output_dir, "final_report.md")
+                no_subtitles = ai_analysis.get("no_subtitles", False)
+                report_content = ""
+
                 yield json.dumps({"status": "progress", "message": "正在上传分析产物到 MinIO..."}) + "\n"
                 minio_upload_tree(output_dir, minio_object_key("outputs", job_id))
 
-                with open(report_path, "r", encoding="utf-8") as f:
-                    report_content = f.read()
+                if not no_subtitles:
+                    report_path = os.path.join(output_dir, "final_report.md")
+                    if os.path.exists(report_path):
+                        with open(report_path, "r", encoding="utf-8") as f:
+                            report_content = f.read()
 
-                # 将 report 中的相对图片链接替换为 presigned URL，前端可直接渲染
-                for seg in ai_analysis.get("segments", []):
-                    if "image_path" in seg:
-                        image_object_key = minio_object_key("outputs", job_id, seg["image_path"])
-                        seg["image_object_key"] = image_object_key
-                        seg["image_url"] = minio_presigned_url(image_object_key)
-                        report_content = report_content.replace(f"]({seg['image_path']})", f"]({seg['image_url']})")
+                    # 将 report 中的相对图片链接替换为 presigned URL，前端可直接渲染
+                    for seg in ai_analysis.get("segments", []):
+                        if "image_path" in seg:
+                            image_object_key = minio_object_key("outputs", job_id, seg["image_path"])
+                            seg["image_object_key"] = image_object_key
+                            seg["image_url"] = minio_presigned_url(image_object_key)
+                            report_content = report_content.replace(f"]({seg['image_path']})", f"]({seg['image_url']})")
 
                 mysql_saved = False
                 mysql_error = ""
@@ -326,6 +331,9 @@ async def get_analysis_by_md5(video_md5: str):
                 access_url = minio_presigned_url(sr)
             elif sk == "url" and sr:
                 access_url = sr
+            elif sk == "local" and sr:
+                 # Assume local static file
+                 access_url = f"/static/{sr}"
         except Exception:
             access_url = ""
         data["access"] = {"primary_url": access_url}
@@ -335,6 +343,22 @@ async def get_analysis_by_md5(video_md5: str):
         
         # 1. ai_analysis
         ai_list = artifacts.get("ai_analysis", [])
+        
+        # Helper to get job_id from asset if missing in artifact
+        asset_meta = asset.get("meta_json")
+        if not isinstance(asset_meta, dict):
+            asset_meta = {}
+        asset_job_id = asset_meta.get("job_id", "")
+        
+        # Fallback: try to extract job_id from source_ref if local
+        if not asset_job_id and asset.get("source_kind") == "local":
+             sr = asset.get("source_ref") or ""
+             # format: tasks/{job_id}/...
+             if sr.startswith("tasks/"):
+                 parts = sr.split("/")
+                 if len(parts) >= 2:
+                     asset_job_id = parts[1]
+
         if ai_list:
             for item in ai_list:
                 cj = item.get("json")
@@ -342,9 +366,24 @@ async def get_analysis_by_md5(video_md5: str):
                 if not isinstance(meta, dict):
                     meta = {}
                 job_id = meta.get("job_id", "")
+                if not job_id:
+                    job_id = asset_job_id
                 
+                # Check if this is a local asset
+                is_local = False
+                if asset.get("source_kind") == "local":
+                    is_local = True
+
                 if isinstance(cj, dict) and "segments" in cj and isinstance(cj["segments"], list):
                     for seg in cj["segments"]:
+                        if is_local:
+                             # For local assets, ensure image_url points to static
+                             if job_id and seg.get("image_path") and not seg.get("image_url", "").startswith("/static/"):
+                                 # Re-construct static URL if missing or invalid
+                                 rel_path = seg["image_path"].replace("\\", "/")
+                                 seg["image_url"] = f"/static/tasks/{job_id}/{rel_path}"
+                             continue
+
                         iok = seg.get("image_object_key")
                         if not iok and job_id and seg.get("image_path"):
                             iok = minio_object_key("outputs", job_id, seg["image_path"])
@@ -361,14 +400,96 @@ async def get_analysis_by_md5(video_md5: str):
         if cf_list:
             for item in cf_list:
                 cj = item.get("json")
+                meta = item.get("meta")
+                if not isinstance(meta, dict):
+                    meta = {}
+                job_id = meta.get("job_id", "")
+                if not job_id:
+                    job_id = asset_job_id
+                
+                # Check if this is a local asset
+                is_local = False
+                if asset.get("source_kind") == "local":
+                    is_local = True
+
                 if isinstance(cj, list):
                     for frame in cj:
+                        if is_local:
+                             if frame.get("url") and not frame.get("url", "").startswith("/static/"):
+                                  # Try to fix using object_key
+                                  # object_key format: outputs/{job_id}/{rel_path}
+                                  # We want: /static/tasks/{job_id}/{rel_path}
+                                  ok = frame.get("object_key")
+                                  if ok and job_id:
+                                      # Remove prefix "outputs/{job_id}/"
+                                      prefix = f"outputs/{job_id}/"
+                                      if ok.startswith(prefix):
+                                          rel = ok[len(prefix):]
+                                          frame["url"] = f"/static/tasks/{job_id}/{rel}"
+                                      elif ok.startswith("outputs/"): # Fallback if job_id mismatch or not present in key
+                                          parts = ok.split("/")
+                                          if len(parts) >= 3: # outputs, job_id, ...
+                                              # Assuming structure outputs/job_id/...
+                                              # Local structure: tasks/job_id/...
+                                              # /static/tasks/job_id/...
+                                              # So just replace "outputs" with "tasks" and prepend "/static/"?
+                                              # Wait, local dir is fast_output/tasks.
+                                              # Static mount is /static -> fast_output.
+                                              # So /static/tasks/...
+                                              # If object_key is outputs/jid/file, we want tasks/jid/file.
+                                              # So replace first "outputs" with "tasks".
+                                              new_path = ok.replace("outputs/", "tasks/", 1)
+                                              frame["url"] = f"/static/{new_path}"
+                             continue
+
                         iok = frame.get("object_key")
                         if iok:
                             try:
                                 frame["url"] = minio_presigned_url(iok)
                             except Exception:
                                 pass
+
+        # 3. report_markdown (Refresh image links)
+        report_list = artifacts.get("report_markdown", [])
+        if report_list:
+            for item in report_list:
+                content_text = item.get("text") or ""
+                # Try to get job_id
+                meta = item.get("meta")
+                if not isinstance(meta, dict):
+                    meta = {}
+                job_id = meta.get("job_id", "")
+                if not job_id:
+                    job_id = asset_job_id
+                
+                if job_id and content_text:
+                    def replace_link(match):
+                        alt = match.group(1)
+                        url = match.group(2)
+                        # Check if relative (not http/blob/data/slash)
+                        if not url or url.startswith("http") or url.startswith("/") or url.startswith("data:") or url.startswith("blob:"):
+                            return match.group(0)
+                        
+                        # If local, task_worker already replaced it with /static/, so we shouldn't be here typically.
+                        # But if somehow we are, handled by startswith("/") check above? 
+                        # Wait, task_worker replaced it with /static/... which starts with /.
+                        # So for local files, we skip.
+                        
+                        # For MinIO, task_worker left it relative.
+                        if minio_enabled():
+                             try:
+                                 # Normalize path
+                                 rel = url.replace("\\", "/")
+                                 # object key: outputs/{job_id}/{rel}
+                                 key = minio_object_key("outputs", job_id, rel)
+                                 signed = minio_presigned_url(key)
+                                 return f"![{alt}]({signed})"
+                             except:
+                                 pass
+                        return match.group(0)
+
+                    new_text = re.sub(r'!\[(.*?)\]\((.*?)\)', replace_link, content_text)
+                    item["text"] = new_text
 
         return data
     except HTTPException:
@@ -460,6 +581,8 @@ async def list_analyses(
                     access_url = minio_presigned_url(sr)
                 elif sk == "url" and sr:
                     access_url = sr
+                elif sk == "local" and sr:
+                    access_url = f"/static/{sr}"
             except Exception:
                 access_url = ""
             it["access"] = {"primary_url": access_url}
@@ -491,4 +614,21 @@ async def list_analyses(
 
         return {"items": items, "limit": limit, "offset": offset}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/analysis/{video_md5}/read")
+async def mark_analysis_read(video_md5: str):
+    """
+    Mark an analysis as read.
+    """
+    print(f"Marking analysis {video_md5} as read...")
+    try:
+        from .mysql_store import mark_asset_as_read
+        
+        success = mark_asset_as_read(video_md5)
+        print(f"Mark read result for {video_md5}: {success}")
+        return {"status": "success", "updated": success}
+    except Exception as e:
+        print(f"Error marking read: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

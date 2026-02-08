@@ -10,7 +10,7 @@
           style="display: none"
           @change="handleLocalVideoInputChange"
         />
-        <div class="video-topbar">
+        <div class="video-topbar" v-if="!isViewMode">
           <div class="video-topbar-input">
             <a-input-search
               v-model="videoUrlInput"
@@ -243,23 +243,25 @@
 
           <!-- Tab 3: Detail -->
           <a-tab-pane key="detail" title="图文详解">
-            <div class="detail-text-area">
-              <div v-if="report" class="markdown-body" v-html="renderedReport" @click="handleMarkdownClick"></div>
-              <div v-else class="empty-state">
-                <icon-file :style="{ fontSize: '48px', color: 'var(--text-muted)' }" />
-                <p>点击右上角“总结”生成详解报告</p>
-              </div>
+            <div class="detail-text-area" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; position: relative;">
+               <FloatingToggle v-model="isEditable" @change="toggleEditable" />
+               <div v-show="isEditable" ref="editorRef" style="height: 100%;"></div>
+               <div v-if="!isEditable" class="markdown-body" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderedReport"></div>
             </div>
           </a-tab-pane>
 
           <!-- Tab: Notes -->
           <a-tab-pane key="notes" title="文稿笔记">
-            <div class="detail-text-area">
+            <div class="detail-text-area" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
               <div v-if="notesLoading" class="mindmap-loading">
                   <icon-refresh-cw spin :style="{ fontSize: '48px', color: 'var(--primary-color)' }" />
                   <p>正在生成文稿笔记...</p>
               </div>
-              <div v-else-if="notesData" class="markdown-body" v-html="renderMarkdown(notesData)"></div>
+              <div v-else-if="notesData || isNotesEditable" style="height: 100%; display: flex; flex-direction: column; position: relative;">
+                 <FloatingToggle v-model="isNotesEditable" @change="toggleNotesEditable" />
+                 <div v-show="isNotesEditable" ref="notesEditorRef" style="height: 100%;"></div>
+                 <div v-if="!isNotesEditable" class="markdown-body" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderMarkdown(notesData)"></div>
+              </div>
               <div v-else class="empty-state">
                 <icon-book-open :style="{ fontSize: '48px', color: 'var(--text-muted)' }" />
                 <p>点击上方“生成文稿笔记”按钮</p>
@@ -440,7 +442,9 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { AiEditor } from "aieditor";
+import "aieditor/dist/style.css"
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useConfigStore } from '../stores/config'
 import { Message } from '@arco-design/web-vue'
@@ -449,6 +453,7 @@ import { processStreamedOutput, flushStreamBuffer } from '../utils/processStream
 import ChipLoader from '../components/ChipLoader.vue'
 import MindMap from '../components/MindMap.vue'
 import UVCheckbox from '../components/UVCheckbox.vue'
+import FloatingToggle from '../components/FloatingToggle.vue'
 import AudioParticleVisualizer from '../components/AudioParticleVisualizer.vue'
 import { 
   List as IconList,
@@ -481,6 +486,26 @@ const backendWsBaseUrl = computed(() => {
   if (base.startsWith('http://')) return base.replace(/^http:/, 'ws:')
   return base
 })
+
+const isViewMode = computed(() => !!(route.query.md5 || route.query.video_md5))
+
+const resolveUrl = (url) => {
+  const u = String(url || '').trim()
+  if (!u) return ''
+  if (u.match(/^https?:\/\//) || u.startsWith('blob:') || u.startsWith('data:')) return u
+  if (u.startsWith('/static/')) {
+    return `${backendBaseUrl.value}${u}`
+  }
+  return u
+}
+
+const resolveMarkdownImages = (text) => {
+  if (!text) return ''
+  // Handle standard markdown images: ![alt](url)
+  return text.replace(/!\[(.*?)\]\((.*?)\)/g, (match, alt, url) => {
+    return `![${alt}](${resolveUrl(url)})`
+  })
+}
 
 // State
 const videoRef = ref(null)
@@ -524,7 +549,209 @@ const coursewareOcrResults = ref([])
 const localVideoInputRef = ref(null)
 const videoDragActive = ref(false)
 
+// Editor state
+const editorRef = ref(null)
+const editorInstance = ref(null)
+const isEditable = ref(false)
+
+// Notes Editor state
+const notesEditorRef = ref(null)
+const notesEditorInstance = ref(null)
+const isNotesEditable = ref(false)
+
 const getCoursewareKey = (item, idx) => `${idx}|${item?.timestamp ?? ''}|${item?.url ?? ''}`
+
+const toggleEditable = (val) => {
+  if (val) {
+    // Switch to Edit Mode: Initialize editor if needed and sync content
+    nextTick(() => {
+       if (!editorInstance.value) {
+           initEditor()
+       } else {
+           // If editor already exists, ensure it has the latest content
+           const content = report.value || ''
+           const resolvedContent = resolveMarkdownImages(content)
+           const htmlContent = marked.parse(resolvedContent)
+           editorInstance.value.setContent(htmlContent)
+       }
+    })
+  } else {
+    // Switch to Preview Mode: Update report with content from editor
+    if (editorInstance.value) {
+       // Note: AiEditor.getHtml() or similar is needed. 
+       // Assuming report is the source of truth for preview. 
+       // If we want edits to persist to preview, we need to update 'report'.
+       // However, 'report' is usually markdown. Converting HTML back to Markdown is complex.
+       // If the user wants to see edits in preview, we might need to store the HTML separately or just use the editor's HTML.
+       // Given the user said "restore HTML style or format", and "directly display that kind of markdown content",
+       // maybe they just want the pure view. 
+       // If edits are important, we should try to sync back.
+       // But transforming HTML -> Markdown perfectly is hard without a library like turndown.
+       // For now, let's assume 'report' is the source. If they edit in editor, it might desync if we don't sync back.
+       // But 'report' is also updated by streaming. 
+       // Let's keep it simple: Preview shows 'report' (Markdown source). Edit shows 'AiEditor' (HTML).
+       // If they edit, it won't reflect in Preview unless we sync. 
+       // If the user intention is just "Read-only view of the original markdown", then no sync is needed.
+       // "Convenient to restore html style or format" -> "方便还原 html 的样式或者格式".
+       // Let's assume one-way sync from Report -> Editor for now, unless user asks for save.
+    }
+  }
+}
+
+const toggleNotesEditable = (val) => {
+  if (val) {
+    nextTick(() => {
+       if (!notesEditorInstance.value) {
+           initNotesEditor()
+       } else {
+           const content = notesData.value || ''
+           const resolvedContent = resolveMarkdownImages(content)
+           const htmlContent = marked.parse(resolvedContent)
+           notesEditorInstance.value.setContent(htmlContent)
+       }
+    })
+  }
+}
+
+const initEditor = () => {
+  if (editorInstance.value) return
+  if (!editorRef.value) return
+  
+  const content = report.value || ''
+  const resolvedContent = resolveMarkdownImages(content)
+  const htmlContent = marked.parse(resolvedContent)
+
+  try {
+    const editorOptions = {
+      element: editorRef.value,
+      placeholder: "等待生成详解报告...",
+      content: htmlContent,
+      editable: true,
+      image: {
+        allowBase64: true,
+        defaultSize: 350,
+      }
+    }
+
+    if (configStore.openai_api_key) {
+      editorOptions.ai = {
+        models: {
+          openai: {
+            customUrl: `${configStore.openai_base_url.replace(/\/+$/, '')}/chat/completions`,
+            apiKey: configStore.openai_api_key,
+            model: configStore.llm_model,
+          }
+        }
+      }
+    }
+
+    editorInstance.value = new AiEditor(editorOptions)
+  } catch (e) {
+    console.error('Failed to init AiEditor:', e)
+  }
+}
+
+const initNotesEditor = () => {
+  if (notesEditorInstance.value) return
+  if (!notesEditorRef.value) return
+  
+  const content = notesData.value || ''
+  const resolvedContent = resolveMarkdownImages(content)
+  const htmlContent = marked.parse(resolvedContent)
+
+  try {
+    const notesOptions = {
+      element: notesEditorRef.value,
+      placeholder: "等待生成文稿笔记...",
+      content: htmlContent,
+      editable: true,
+      image: {
+        allowBase64: true,
+        defaultSize: 350,
+      }
+    }
+
+    if (configStore.openai_api_key) {
+      notesOptions.ai = {
+        models: {
+          openai: {
+            customUrl: `${configStore.openai_base_url.replace(/\/+$/, '')}/chat/completions`,
+            apiKey: configStore.openai_api_key,
+            model: configStore.llm_model,
+          }
+        }
+      }
+    }
+
+    notesEditorInstance.value = new AiEditor(notesOptions)
+  } catch (e) {
+    console.error('Failed to init Notes AiEditor:', e)
+  }
+}
+
+let updateTimer = null
+let notesUpdateTimer = null
+
+watch(activeRightTab, (newVal) => {
+  if (newVal === 'detail') {
+    if (isEditable.value) {
+      nextTick(() => {
+        initEditor()
+      })
+    }
+  } else if (newVal === 'notes') {
+    if (isNotesEditable.value) {
+      nextTick(() => {
+        initNotesEditor()
+      })
+    }
+  }
+})
+
+watch(report, (newVal) => {
+  if (editorInstance.value) {
+    if (updateTimer) clearTimeout(updateTimer)
+    updateTimer = setTimeout(() => {
+      try {
+        if (!editorInstance.value) return
+        const resolved = resolveMarkdownImages(newVal || '')
+        const html = marked.parse(resolved)
+        editorInstance.value.setContent(html)
+      } catch (e) {
+        console.warn('Editor update skipped:', e)
+      }
+    }, 300)
+  }
+})
+
+watch(notesData, (newVal) => {
+  if (notesEditorInstance.value) {
+    if (notesUpdateTimer) clearTimeout(notesUpdateTimer)
+    notesUpdateTimer = setTimeout(() => {
+      try {
+        if (!notesEditorInstance.value) return
+        const resolved = resolveMarkdownImages(newVal || '')
+        const html = marked.parse(resolved)
+        notesEditorInstance.value.setContent(html)
+      } catch (e) {
+        console.warn('Notes Editor update skipped:', e)
+      }
+    }, 300)
+  }
+})
+
+onUnmounted(() => {
+  if (updateTimer) clearTimeout(updateTimer)
+  if (notesUpdateTimer) clearTimeout(notesUpdateTimer)
+  if (editorInstance.value) {
+    editorInstance.value.destroy()
+    editorInstance.value = null
+  }
+  if (notesEditorInstance.value) {
+    notesEditorInstance.value.destroy()
+    notesEditorInstance.value = null
+  }
+})
 
 const isCoursewareSelected = (key) => selectedCoursewareKeys.value.has(key)
 
@@ -716,8 +943,10 @@ const handleGenerateMindmap = async () => {
 // Computed
 const renderedReport = computed(() => {
   if (!report.value) return ''
-  const linkedReport = report.value.replace(/(\d{2}:\d{2}:\d{2})/g, '[$1](timestamp:$1)')
-  return marked(linkedReport)
+  // Use resolveMarkdownImages to ensure image URLs are correct
+  const resolved = resolveMarkdownImages(report.value)
+  const linkedReport = resolved.replace(/(\d{2}:\d{2}:\d{2})/g, '[$1](timestamp:$1)')
+  return marked.parse(linkedReport, { gfm: true, breaks: true })
 })
 
 
@@ -801,7 +1030,8 @@ const currentSubtitle = computed(() => {
 
 const renderMarkdown = (text) => {
     try {
-      return marked.parse(text || '', { 
+      const resolvedText = resolveMarkdownImages(text)
+      return marked.parse(resolvedText || '', { 
         gfm: true,
         breaks: true 
       })
@@ -1198,11 +1428,21 @@ const loadFromMd5 = async (md5) => {
     const pick = (type) => (Array.isArray(artifacts[type]) && artifacts[type].length ? artifacts[type][0] : null)
 
     videoMd5.value = payload?.asset?.md5 || v
-    videoUrl.value = payload?.access?.primary_url || ''
+    videoUrl.value = resolveUrl(payload?.access?.primary_url || '')
     videoPath.value = payload?.asset?.source_ref || ''
 
     const analysis = pick('ai_analysis')?.json || null
-    const reportText = pick('report_markdown')?.text || ''
+    const usedImageUrls = new Set()
+    if (analysis && Array.isArray(analysis.segments)) {
+      analysis.segments.forEach(seg => {
+        if (seg.image_url) {
+          seg.image_url = resolveUrl(seg.image_url)
+          usedImageUrls.add(seg.image_url)
+        }
+      })
+    }
+    const reportArtifact = pick('report_markdown')
+    const reportText = reportArtifact?.text || reportArtifact?.json?.content || ''
     analysisData.value = analysis
     report.value = reportText
 
@@ -1257,7 +1497,14 @@ const loadFromMd5 = async (md5) => {
     if (framesData.length) {
       coursewareData.value = framesData
         .filter(Boolean)
-        .map((x) => ({ url: x.url, timestamp: x.timestamp, object_key: x.object_key }))
+        .map((x) => ({ url: resolveUrl(x.url), timestamp: x.timestamp, object_key: x.object_key }))
+        .filter(item => {
+          // Filter out cover images (timestamp < 1s)
+          if (item.timestamp < 1) return false
+          // Filter out images used in segments (detail view)
+          if (usedImageUrls.has(item.url)) return false
+          return true
+        })
     }
 
     const lastChat = pick('chat_session')?.json
@@ -1272,9 +1519,9 @@ const loadFromMd5 = async (md5) => {
 }
 
 watch(
-  () => route.query.md5,
-  (md5) => {
-    if (md5) loadFromMd5(md5)
+  () => route.query.md5 || route.query.video_md5,
+  (val) => {
+    if (val) loadFromMd5(val)
   },
   { immediate: true }
 )
@@ -1322,10 +1569,13 @@ const readSseResponse = async (response) => {
             mediaType.value = 'video'
           }
           if (analysisData.value.segments && Array.isArray(analysisData.value.segments)) {
+            analysisData.value.segments.forEach(seg => {
+              if (seg.image_url) seg.image_url = resolveUrl(seg.image_url)
+            })
             analysisData.value.segments.sort((a, b) => a.timestamp - b.timestamp)
           }
           if (!videoFile.value && data.video_url) {
-            videoUrl.value = data.video_url
+            videoUrl.value = resolveUrl(data.video_url)
           }
           videoPath.value = data.object_key || data.video_path || ''
           if (data.video_md5) videoMd5.value = String(data.video_md5 || '').trim().toLowerCase()
@@ -3227,4 +3477,18 @@ const handleSubmit = async () => {
 .chat-messages::-webkit-scrollbar-button {
   display: none;
 }
+.no-subtitles-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  gap: 16px;
+  padding-top: 100px;
+}
+
+.no-subtitles-state p {
+    font-size: 16px;
+  }
 </style>
