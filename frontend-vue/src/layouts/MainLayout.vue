@@ -65,6 +65,7 @@
 <script setup>
 import { computed, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Message } from '@arco-design/web-vue'
 import AIBackground from '../components/AIBackground.vue'
 import { useConfigStore } from '../stores/config'
 import headerImg from '../assert/headr.png'
@@ -79,7 +80,8 @@ import {
   IconSearch,
   IconSunFill,
   IconMoonFill,
-  IconList
+  IconList,
+  IconFolder
 } from '@arco-design/web-vue/es/icon'
 
 const route = useRoute()
@@ -88,6 +90,7 @@ const configStore = useConfigStore()
 
 const navItems = [
   { key: 'Dashboard', icon: IconHome, label: '仪表盘' },
+  { key: 'Category', icon: IconFolder, label: '分类管理' },
   { key: 'Video', icon: IconPlayCircle, label: '分析列表' },
   { key: 'TaskList', icon: IconList, label: '任务列表' },
   { key: 'Analytics', icon: IconBarChart, label: '数据统计' },
@@ -98,7 +101,8 @@ const navItems = [
 const selectedKey = computed(() => {
   if (route.name === 'Dashboard') return 'Dashboard'
   if (route.name === 'Settings') return 'Settings'
-  if (route.name === 'AiVideoSummary') return 'Video'
+  if (route.name === 'Category') return 'Category'
+  if (route.name === 'Video' || route.name === 'AiVideoSummary' || route.name === 'AiFileSummary') return 'Video'
   if (route.name === 'TaskList') return 'TaskList'
   return route.name
 })
@@ -120,6 +124,12 @@ const handleMenuClick = (key) => {
     router.push('/tasks')
   } else if (key === 'Settings') {
     router.push('/settings')
+  } else if (key === 'Category') {
+    router.push('/category')
+  } else if (key === 'Analytics') {
+    router.push('/analytics')
+  } else if (key === 'History') {
+    router.push('/history')
   }
 }
 

@@ -498,6 +498,81 @@ async def get_analysis_by_md5(video_md5: str):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+
+
+
+@router.get("/analysis/tags")
+async def get_all_tags():
+    """
+    Get aggregated tags from all analysis results for word cloud.
+    Returns: {"tags": [{"name": "tag1", "value": 10}, ...]}
+    """
+    try:
+        from .mysql_store import get_all_analysis_tags
+        tags = get_all_analysis_tags()
+        return {"status": "success", "tags": tags}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+@router.get("/analysis/list")
+async def list_analyses(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    folder_id: str | None = Query(None),
+):
+    try:
+        from .mysql_store import list_assets_with_artifact
+
+        items = list_assets_with_artifact(
+            artifact_type="ai_analysis", 
+            limit=limit, 
+            offset=offset,
+            folder_id=folder_id
+        )
+        for it in items:
+            sk = (it.get("source_kind") or "").strip().lower()
+            sr = (it.get("source_ref") or "").strip()
+            access_url = ""
+            try:
+                if sk == "minio" and sr:
+                    access_url = minio_presigned_url(sr)
+                elif sk == "url" and sr:
+                    access_url = sr
+                elif sk == "local" and sr:
+                    access_url = f"/static/{sr}"
+            except Exception:
+                access_url = ""
+            it["access"] = {"primary_url": access_url}
+            if not it.get("display_name") and sr:
+                it["display_name"] = os.path.basename(sr.replace("\\", "/"))
+
+            # Refresh image URLs in content_json (cover images)
+            cj = it.get("content_json")
+            if isinstance(cj, dict) and "segments" in cj and isinstance(cj["segments"], list):
+                job_id = ""
+                meta = it.get("meta")
+                if isinstance(meta, dict):
+                    job_id = meta.get("job_id", "")
+                
+                for seg in cj["segments"]:
+                    # Try to get object key
+                    iok = seg.get("image_object_key")
+                    if not iok and job_id and seg.get("image_path"):
+                        # Fallback: construct object key if missing but job_id is known
+                        iok = minio_object_key("outputs", job_id, seg["image_path"])
+                        seg["image_object_key"] = iok 
+                    
+                    if iok:
+                        try:
+                            # Generate fresh presigned URL
+                            seg["image_url"] = minio_presigned_url(iok)
+                        except Exception:
+                            pass
+
+        return {"items": items, "limit": limit, "offset": offset}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.delete("/analysis/{video_md5}")
 async def delete_analysis(video_md5: str):
     """
@@ -560,60 +635,6 @@ async def delete_analysis(video_md5: str):
         
     except Exception as e:
         print(f"Error deleting analysis: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@router.get("/analysis/list")
-async def list_analyses(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-):
-    try:
-        from .mysql_store import list_assets_with_artifact
-
-        items = list_assets_with_artifact(artifact_type="ai_analysis", limit=limit, offset=offset)
-        for it in items:
-            sk = (it.get("source_kind") or "").strip().lower()
-            sr = (it.get("source_ref") or "").strip()
-            access_url = ""
-            try:
-                if sk == "minio" and sr:
-                    access_url = minio_presigned_url(sr)
-                elif sk == "url" and sr:
-                    access_url = sr
-                elif sk == "local" and sr:
-                    access_url = f"/static/{sr}"
-            except Exception:
-                access_url = ""
-            it["access"] = {"primary_url": access_url}
-            if not it.get("display_name") and sr:
-                it["display_name"] = os.path.basename(sr.replace("\\", "/"))
-
-            # Refresh image URLs in content_json (cover images)
-            cj = it.get("content_json")
-            if isinstance(cj, dict) and "segments" in cj and isinstance(cj["segments"], list):
-                job_id = ""
-                meta = it.get("meta")
-                if isinstance(meta, dict):
-                    job_id = meta.get("job_id", "")
-                
-                for seg in cj["segments"]:
-                    # Try to get object key
-                    iok = seg.get("image_object_key")
-                    if not iok and job_id and seg.get("image_path"):
-                        # Fallback: construct object key if missing but job_id is known
-                        iok = minio_object_key("outputs", job_id, seg["image_path"])
-                        seg["image_object_key"] = iok 
-                    
-                    if iok:
-                        try:
-                            # Generate fresh presigned URL
-                            seg["image_url"] = minio_presigned_url(iok)
-                        except Exception:
-                            pass
-
-        return {"items": items, "limit": limit, "offset": offset}
-    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

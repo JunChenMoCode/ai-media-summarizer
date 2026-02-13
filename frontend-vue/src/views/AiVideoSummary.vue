@@ -447,6 +447,7 @@ import "aieditor/dist/style.css"
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useConfigStore } from '../stores/config'
+import { useHistoryStore } from '../stores/history'
 import { Message } from '@arco-design/web-vue'
 import { marked } from 'marked'
 import { processStreamedOutput, flushStreamBuffer } from '../utils/processStreamedOutput'
@@ -479,6 +480,7 @@ import {
 const router = useRouter()
 const route = useRoute()
 const configStore = useConfigStore()
+const historyStore = useHistoryStore()
 const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
 const backendWsBaseUrl = computed(() => {
   const base = backendBaseUrl.value
@@ -564,15 +566,18 @@ const getCoursewareKey = (item, idx) => `${idx}|${item?.timestamp ?? ''}|${item?
 const toggleEditable = (val) => {
   if (val) {
     // Switch to Edit Mode: Initialize editor if needed and sync content
-    nextTick(() => {
+    nextTick(async () => {
        if (!editorInstance.value) {
-           initEditor()
+           await initEditor()
        } else {
            // If editor already exists, ensure it has the latest content
-           const content = report.value || ''
-           const resolvedContent = resolveMarkdownImages(content)
-           const htmlContent = marked.parse(resolvedContent)
-           editorInstance.value.setContent(htmlContent)
+           if (editorInstance.value) {
+              const content = report.value || ''
+              const resolvedContent = resolveMarkdownImages(content)
+              let htmlContent = marked.parse(resolvedContent)
+              if (htmlContent instanceof Promise) htmlContent = await htmlContent
+              editorInstance.value.setContent(htmlContent)
+           }
        }
     })
   } else {
@@ -600,28 +605,41 @@ const toggleEditable = (val) => {
 
 const toggleNotesEditable = (val) => {
   if (val) {
-    nextTick(() => {
+    nextTick(async () => {
        if (!notesEditorInstance.value) {
-           initNotesEditor()
+           await initNotesEditor()
        } else {
            const content = notesData.value || ''
            const resolvedContent = resolveMarkdownImages(content)
-           const htmlContent = marked.parse(resolvedContent)
+           let htmlContent = marked.parse(resolvedContent)
+           if (htmlContent instanceof Promise) htmlContent = await htmlContent
            notesEditorInstance.value.setContent(htmlContent)
        }
     })
   }
 }
 
-const initEditor = () => {
+const initEditor = async () => {
   if (editorInstance.value) return
   if (!editorRef.value) return
   
-  const content = report.value || ''
-  const resolvedContent = resolveMarkdownImages(content)
-  const htmlContent = marked.parse(resolvedContent)
-
   try {
+    const content = report.value || ''
+    
+    let htmlContent = ''
+    try {
+      const resolvedContent = resolveMarkdownImages(content)
+      const parsed = marked.parse(resolvedContent)
+      htmlContent = parsed instanceof Promise ? await parsed : parsed
+    } catch (err) {
+      console.error('[Debug] marked.parse failed:', err)
+      htmlContent = `<p style="color:red">Markdown render error: ${err.message}</p><pre>${content}</pre>`
+    }
+
+    if (!htmlContent && content) {
+        htmlContent = `<pre>${content}</pre>`
+    }
+
     const editorOptions = {
       element: editorRef.value,
       placeholder: "等待生成详解报告...",
@@ -648,18 +666,31 @@ const initEditor = () => {
     editorInstance.value = new AiEditor(editorOptions)
   } catch (e) {
     console.error('Failed to init AiEditor:', e)
+    Message.error('编辑器初始化失败: ' + e.message)
   }
 }
 
-const initNotesEditor = () => {
+const initNotesEditor = async () => {
   if (notesEditorInstance.value) return
   if (!notesEditorRef.value) return
   
-  const content = notesData.value || ''
-  const resolvedContent = resolveMarkdownImages(content)
-  const htmlContent = marked.parse(resolvedContent)
-
   try {
+    const content = notesData.value || ''
+    
+    let htmlContent = ''
+    try {
+      const resolvedContent = resolveMarkdownImages(content)
+      const parsed = marked.parse(resolvedContent)
+      htmlContent = parsed instanceof Promise ? await parsed : parsed
+    } catch (err) {
+      console.error('[Debug] marked.parse failed:', err)
+      htmlContent = `<p style="color:red">Markdown render error: ${err.message}</p><pre>${content}</pre>`
+    }
+
+    if (!htmlContent && content) {
+        htmlContent = `<pre>${content}</pre>`
+    }
+
     const notesOptions = {
       element: notesEditorRef.value,
       placeholder: "等待生成文稿笔记...",
@@ -686,6 +717,7 @@ const initNotesEditor = () => {
     notesEditorInstance.value = new AiEditor(notesOptions)
   } catch (e) {
     console.error('Failed to init Notes AiEditor:', e)
+    Message.error('笔记编辑器初始化失败: ' + e.message)
   }
 }
 
@@ -711,27 +743,29 @@ watch(activeRightTab, (newVal) => {
 watch(report, (newVal) => {
   if (editorInstance.value) {
     if (updateTimer) clearTimeout(updateTimer)
-    updateTimer = setTimeout(() => {
+    updateTimer = setTimeout(async () => {
       try {
         if (!editorInstance.value) return
         const resolved = resolveMarkdownImages(newVal || '')
-        const html = marked.parse(resolved)
+        let html = marked.parse(resolved)
+        if (html instanceof Promise) html = await html
         editorInstance.value.setContent(html)
       } catch (e) {
         console.warn('Editor update skipped:', e)
       }
-    }, 300)
+    }, 300) // Throttle updates to 300ms
   }
 })
 
 watch(notesData, (newVal) => {
   if (notesEditorInstance.value) {
     if (notesUpdateTimer) clearTimeout(notesUpdateTimer)
-    notesUpdateTimer = setTimeout(() => {
+    notesUpdateTimer = setTimeout(async () => {
       try {
         if (!notesEditorInstance.value) return
         const resolved = resolveMarkdownImages(newVal || '')
-        const html = marked.parse(resolved)
+        let html = marked.parse(resolved)
+        if (html instanceof Promise) html = await html
         notesEditorInstance.value.setContent(html)
       } catch (e) {
         console.warn('Notes Editor update skipped:', e)
@@ -953,7 +987,7 @@ const renderedReport = computed(() => {
 
 const renderChatMarkdown = (content) => {
   if (!content) return ''
-  return marked(content)
+  return marked.parse(content)
 }
 
 const activeSegment = computed(() => {
@@ -1511,6 +1545,15 @@ const loadFromMd5 = async (md5) => {
     if (lastChat && Array.isArray(lastChat.messages) && lastChat.messages.length) {
       chatMessages.value = lastChat.messages
     }
+
+    // Add to History
+    historyStore.addToHistory({
+      md5: payload?.asset?.md5 || v,
+      display_name: payload?.asset?.display_name,
+      created_at: payload?.asset?.created_at,
+      asset_type: payload?.asset?.asset_type,
+      content_json: analysis
+    })
 
     Message.success('已从 md5 加载')
   } catch (e) {

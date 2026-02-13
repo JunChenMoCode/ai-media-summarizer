@@ -14,6 +14,7 @@ from .translate_routes import router as translate_router
 from .video import router as video_router
 from .file_routes import router as file_router
 from .tasks_routes import router as tasks_router
+from .folder_routes import router as folder_router
 from .task_worker import worker_loop
 import asyncio
 from contextlib import asynccontextmanager
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(video_router)
     app.include_router(file_router)
     app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+    app.include_router(folder_router)
     app.include_router(analyze_router)
     app.include_router(translate_router)
     app.include_router(ocr_router)

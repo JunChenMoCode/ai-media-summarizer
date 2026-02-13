@@ -59,8 +59,8 @@ def _column_exists(conn, table_name: str, column_name: str) -> bool:
             SELECT 1
             FROM information_schema.columns
             WHERE table_schema = :db
-              AND table_name = :table
-              AND column_name = :col
+            AND table_name = :table
+            AND column_name = :col
             LIMIT 1
             """
         ),
@@ -82,6 +82,9 @@ def _migrate_schema(conn) -> None:
         alters.append("ALTER TABLE media_assets ADD COLUMN display_name VARCHAR(255) NULL AFTER mime_type")
     if not _column_exists(conn, "media_assets", "is_read"):
         alters.append("ALTER TABLE media_assets ADD COLUMN is_read TINYINT(1) NOT NULL DEFAULT 0 AFTER display_name")
+    if not _column_exists(conn, "media_assets", "folder_id"):
+        alters.append("ALTER TABLE media_assets ADD COLUMN folder_id BIGINT UNSIGNED NULL AFTER is_read")
+        alters.append("ALTER TABLE media_assets ADD CONSTRAINT fk_media_assets_folder_id FOREIGN KEY (folder_id) REFERENCES media_folders(id) ON DELETE SET NULL")
 
     if not _column_exists(conn, "media_artifacts", "meta_json"):
         alters.append("ALTER TABLE media_artifacts ADD COLUMN meta_json JSON NULL AFTER content_json")
@@ -103,6 +106,17 @@ def mysql_init() -> None:
     engine = mysql_engine()
     ddl = [
         """
+        CREATE TABLE IF NOT EXISTS media_folders (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          parent_id BIGINT UNSIGNED NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          KEY idx_media_folders_parent_id (parent_id),
+          CONSTRAINT fk_media_folders_parent_id FOREIGN KEY (parent_id) REFERENCES media_folders(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
         CREATE TABLE IF NOT EXISTS media_assets (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
           md5 CHAR(32) NOT NULL,
@@ -110,13 +124,16 @@ def mysql_init() -> None:
           mime_type VARCHAR(128) NULL,
           display_name VARCHAR(255) NULL,
           is_read TINYINT(1) NOT NULL DEFAULT 0,
+          folder_id BIGINT UNSIGNED NULL,
           media_type VARCHAR(16) NOT NULL DEFAULT '',
           source_kind VARCHAR(16) NOT NULL DEFAULT '',
           source_ref VARCHAR(1024) NULL,
           meta_json JSON NULL,
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          UNIQUE KEY uq_media_assets_md5 (md5)
+          UNIQUE KEY uq_media_assets_md5 (md5),
+          KEY idx_media_assets_folder_id (folder_id),
+          CONSTRAINT fk_media_assets_folder_id FOREIGN KEY (folder_id) REFERENCES media_folders(id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
         """
@@ -483,6 +500,7 @@ def list_assets_with_artifact(
     artifact_type: str = "ai_analysis",
     limit: int = 50,
     offset: int = 0,
+    folder_id: int | str | None = None
 ) -> list[dict]:
     if not mysql_enabled():
         return []
@@ -498,16 +516,34 @@ def list_assets_with_artifact(
         a_type = "ai_analysis"
 
     engine = mysql_engine()
+    
+    where_clauses = ["ar.artifact_type = :artifact_type"]
+    params = {"artifact_type": a_type, "limit": lim, "offset": off}
+    
+    if folder_id is not None:
+        if str(folder_id).lower() in ("null", "uncategorized", "none"):
+            where_clauses.append("a.folder_id IS NULL")
+        else:
+            try:
+                fid = int(folder_id)
+                where_clauses.append("a.folder_id = :folder_id")
+                params["folder_id"] = fid
+            except:
+                pass # Ignore invalid folder_id
+
+    where_sql = " AND ".join(where_clauses)
+
     with engine.begin() as conn:
         rows = conn.execute(
             text(
-                """
+                f"""
                 SELECT
                   a.md5,
                   a.asset_type,
                   a.mime_type,
                   a.display_name,
                   a.is_read,
+                  a.folder_id,
                   a.media_type,
                   a.source_kind,
                   a.source_ref,
@@ -517,12 +553,12 @@ def list_assets_with_artifact(
                   ar.content_json
                 FROM media_assets a
                 JOIN media_artifacts ar ON ar.asset_id = a.id
-                WHERE ar.artifact_type = :artifact_type
+                WHERE {where_sql}
                 ORDER BY a.updated_at DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),
-            {"artifact_type": a_type, "limit": lim, "offset": off},
+            params,
         ).mappings().all()
 
     out: list[dict] = []
@@ -548,6 +584,7 @@ def list_assets_with_artifact(
                 "mime_type": r.get("mime_type"),
                 "display_name": r.get("display_name"),
                 "is_read": bool(r.get("is_read") or 0),
+                "folder_id": r.get("folder_id"),
                 "media_type": r.get("media_type", ""),
                 "source_kind": r.get("source_kind", ""),
                 "source_ref": r.get("source_ref"),
@@ -599,3 +636,153 @@ def delete_asset_by_md5(video_md5: str) -> bool:
         )
         
     return True
+
+
+def move_asset_to_folder(video_md5: str, folder_id: int | None) -> bool:
+    if not mysql_enabled():
+        return False
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    with engine.begin() as conn:
+        res = conn.execute(
+            text("UPDATE media_assets SET folder_id = :folder_id WHERE md5 = :md5"),
+            {"folder_id": folder_id, "md5": video_md5}
+        )
+        return res.rowcount > 0
+
+
+# Folder methods
+
+def create_folder(name: str, parent_id: int | None = None) -> int:
+    if not mysql_enabled():
+        return 0
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO media_folders (name, parent_id, created_at, updated_at)
+                VALUES (:name, :parent_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+            ),
+            {"name": name, "parent_id": parent_id},
+        )
+        return result.lastrowid
+
+
+def list_folders() -> list[dict]:
+    if not mysql_enabled():
+        return []
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("SELECT id, parent_id, name, created_at, updated_at FROM media_folders ORDER BY name ASC")
+        ).mappings().all()
+        
+    return [
+        {
+            "id": r["id"],
+            "parent_id": r["parent_id"],
+            "name": r["name"],
+            "created_at": str(r["created_at"]),
+            "updated_at": str(r["updated_at"]),
+        }
+        for r in rows
+    ]
+
+
+def update_folder(folder_id: int, name: str | None = None, parent_id: int | None = None) -> bool:
+    if not mysql_enabled():
+        return False
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    updates = []
+    params = {"id": folder_id}
+    
+    if name is not None:
+        updates.append("name = :name")
+        params["name"] = name
+    if parent_id is not None:
+        if parent_id == folder_id:
+             return False
+        updates.append("parent_id = :parent_id")
+        params["parent_id"] = parent_id
+        
+    if not updates:
+        return False
+        
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    sql = f"UPDATE media_folders SET {', '.join(updates)} WHERE id = :id"
+    
+    with engine.begin() as conn:
+        res = conn.execute(text(sql), params)
+        return res.rowcount > 0
+
+
+def delete_folder(folder_id: int) -> bool:
+    if not mysql_enabled():
+        return False
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    with engine.begin() as conn:
+        res = conn.execute(
+            text("DELETE FROM media_folders WHERE id = :id"),
+            {"id": folder_id}
+        )
+        return res.rowcount > 0
+
+
+def get_all_analysis_tags() -> list[dict]:
+    if not mysql_enabled():
+        return []
+    
+    mysql_init()
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT content_json
+                FROM media_artifacts
+                WHERE artifact_type = 'ai_analysis'
+                """
+            )
+        ).mappings().all()
+        
+    tag_counts = {}
+    for r in rows:
+        cj = r.get("content_json")
+        if isinstance(cj, str):
+            try:
+                cj = json.loads(cj)
+            except Exception:
+                continue
+        
+        if isinstance(cj, dict):
+            tags = cj.get("tags", [])
+            if isinstance(tags, list):
+                for tag in tags:
+                    t = str(tag).strip()
+                    if t:
+                        tag_counts[t] = tag_counts.get(t, 0) + 1
+                        
+    # Format for echarts-wordcloud: [{"name": "tag", "value": count}]
+    result = [{"name": k, "value": v} for k, v in tag_counts.items()]
+    # Sort by value desc
+    result.sort(key=lambda x: x["value"], reverse=True)
+    return result

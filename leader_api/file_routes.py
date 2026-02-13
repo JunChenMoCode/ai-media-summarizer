@@ -17,6 +17,7 @@ from .minio_store import (
     minio_presigned_url
 )
 from .mysql_store import save_artifact_by_md5, _sanitize_config
+from .models import ConfigModel
 
 router = APIRouter()
 

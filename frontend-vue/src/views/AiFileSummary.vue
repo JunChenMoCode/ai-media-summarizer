@@ -202,6 +202,7 @@ import "aieditor/dist/style.css"
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useConfigStore } from '../stores/config'
+import { useHistoryStore } from '../stores/history'
 import { Message } from '@arco-design/web-vue'
 import { marked } from 'marked'
 import { processStreamedOutput, flushStreamBuffer } from '../utils/processStreamedOutput'
@@ -227,6 +228,7 @@ import {
 const router = useRouter()
 const route = useRoute()
 const configStore = useConfigStore()
+const historyStore = useHistoryStore()
 const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
 const backendWsBaseUrl = computed(() => {
   const base = backendBaseUrl.value
@@ -283,14 +285,15 @@ const resolveMarkdownImages = (text) => {
 
 const toggleEditable = (val) => {
   if (val) {
-    nextTick(() => {
+    nextTick(async () => {
        if (!editorInstance.value) {
-           initEditor()
+           await initEditor()
        } else {
            if (editorInstance.value) {
               const content = report.value || ''
               const resolvedContent = resolveMarkdownImages(content)
-              const htmlContent = marked.parse(resolvedContent)
+              let htmlContent = marked.parse(resolvedContent)
+              if (htmlContent instanceof Promise) htmlContent = await htmlContent
               editorInstance.value.setContent(htmlContent)
            }
        }
@@ -298,15 +301,31 @@ const toggleEditable = (val) => {
   }
 }
 
-const initEditor = () => {
+const initEditor = async () => {
   if (editorInstance.value) return
   if (!editorRef.value) return
   
-  const content = report.value || ''
-  const resolvedContent = resolveMarkdownImages(content)
-  const htmlContent = marked.parse(resolvedContent)
-
   try {
+    const content = report.value || ''
+    console.log('[Debug] initEditor content length:', content.length)
+    
+    let htmlContent = ''
+    try {
+      const resolvedContent = resolveMarkdownImages(content)
+      const parsed = marked.parse(resolvedContent)
+      htmlContent = parsed instanceof Promise ? await parsed : parsed
+    } catch (err) {
+      console.error('[Debug] marked.parse failed:', err)
+      htmlContent = `<p style="color:red">Markdown render error: ${err.message}</p><pre>${content}</pre>`
+    }
+
+    if (!htmlContent && content) {
+        console.warn('[Debug] htmlContent is empty but content exists. Fallback to raw.')
+        htmlContent = `<pre>${content}</pre>`
+    }
+
+    console.log('[Debug] htmlContent length:', htmlContent.length)
+
     const editorOptions = {
       element: editorRef.value,
       placeholder: "等待生成详解报告...",
@@ -331,13 +350,16 @@ const initEditor = () => {
     }
 
     editorInstance.value = new AiEditor(editorOptions)
+    console.log('[Debug] AiEditor instance created')
   } catch (e) {
     console.error('Failed to init AiEditor:', e)
+    Message.error('编辑器初始化失败: ' + e.message)
   }
 }
 
 onMounted(() => {
-  if (activeRightTab.value === 'detail') {
+  // Do not init editor on mount if not editable
+  if (activeRightTab.value === 'detail' && isEditable.value) {
     nextTick(() => initEditor())
   }
 })
@@ -357,14 +379,12 @@ let updateTimer = null
 watch(report, (newVal) => {
   if (editorInstance.value) {
     if (updateTimer) clearTimeout(updateTimer)
-    updateTimer = setTimeout(() => {
+    updateTimer = setTimeout(async () => {
       try {
         if (!editorInstance.value) return
         const resolved = resolveMarkdownImages(newVal || '')
-        const html = marked.parse(resolved)
-        // Check if content is actually different to avoid unnecessary updates? 
-        // AiEditor doesn't expose getHTML() easily maybe? 
-        // Just setContent with protection
+        let html = marked.parse(resolved)
+        if (html instanceof Promise) html = await html
         editorInstance.value.setContent(html)
       } catch (e) {
         console.warn('Editor update skipped:', e)
@@ -384,7 +404,12 @@ onUnmounted(() => {
 // Computed
 const renderedReport = computed(() => {
   if (!report.value) return ''
-  return marked(report.value)
+  try {
+    return marked.parse(report.value)
+  } catch (e) {
+    console.error('Render report error:', e)
+    return report.value
+  }
 })
 
 const currentContentTitle = computed(() => {
@@ -605,6 +630,15 @@ const loadFromMd5 = async (md5) => {
     if (lastChat && Array.isArray(lastChat.messages) && lastChat.messages.length) {
       chatMessages.value = lastChat.messages
     }
+
+    // Add to History
+    historyStore.addToHistory({
+      md5: payload?.asset?.md5 || v,
+      display_name: payload?.asset?.display_name,
+      created_at: payload?.asset?.created_at,
+      asset_type: payload?.asset?.asset_type,
+      content_json: analysis
+    })
 
     Message.success('已从 md5 加载')
   } catch (e) {

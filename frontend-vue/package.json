@@ -22,6 +22,8 @@
     "@vue-office/pptx": "^1.0.1",
     "aieditor": "^1.4.2",
     "axios": "^1.13.4",
+    "echarts": "^5.6.0",
+    "echarts-wordcloud": "^2.1.0",
     "lucide-vue-next": "^0.563.0",
     "marked": "^17.0.1",
     "pinia": "^3.0.4",

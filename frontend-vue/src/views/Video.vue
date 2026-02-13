@@ -99,9 +99,11 @@ import { useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconDelete } from '@arco-design/web-vue/es/icon'
 import { useConfigStore } from '../stores/config'
+import { useHistoryStore } from '../stores/history'
 
 const router = useRouter()
 const configStore = useConfigStore()
+const historyStore = useHistoryStore()
 
 const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
 
@@ -109,51 +111,42 @@ const items = ref([])
 const loading = ref(false)
 const keyword = ref('')
 
+const norm = (s) => String(s || '').trim().toLowerCase()
+
+const filteredItems = computed(() => {
+  if (!keyword.value) return items.value
+  const kw = keyword.value.toLowerCase()
+  return items.value.filter(item => {
+    const title = (item.content_json?.title || '').toLowerCase()
+    const md5 = (item.md5 || '').toLowerCase()
+    const dn = (item.display_name || '').toLowerCase()
+    return title.includes(kw) || md5.includes(kw) || dn.includes(kw)
+  })
+})
+
 const loadList = async () => {
   loading.value = true
   try {
-    const res = await fetch(`${backendBaseUrl.value}/analysis/list?limit=200&offset=0`)
+    const res = await fetch(`${backendBaseUrl.value}/analysis/list?limit=100`)
     if (!res.ok) {
-      const txt = await res.text()
-      throw new Error(txt || 'Load failed')
+      const err = await res.text()
+      throw new Error(err)
     }
     const data = await res.json()
-    const rawItems = Array.isArray(data.items) ? data.items : []
-    // Ensure content_json is an object
-    items.value = rawItems.map(it => {
-      if (it.content_json && typeof it.content_json === 'string') {
-        try {
-          it.content_json = JSON.parse(it.content_json)
-        } catch (e) {
-          console.warn('Failed to parse content_json for', it.md5, e)
-        }
-      }
-      return it
-    })
+    items.value = data.items || []
   } catch (e) {
-    Message.error(e.message || '加载失败')
-    items.value = []
+    Message.error(e.message || '加载列表失败')
   } finally {
     loading.value = false
   }
 }
 
-const norm = (s) => String(s || '').trim().toLowerCase()
-
-const filteredItems = computed(() => {
-  const q = norm(keyword.value)
-  if (!q) return items.value
-  return (items.value || []).filter((x) => {
-    const d = norm(x.display_name)
-    const m = norm(x.md5)
-    const r = norm(x.source_ref)
-    return d.includes(q) || m.includes(q) || r.includes(q)
-  })
-})
-
 const openItem = async (item) => {
   const md5 = norm(item?.md5)
   if (!md5) return
+
+  // Add to history
+  historyStore.addToHistory(item)
 
   // Mark as read locally first for instant feedback
   if (!item.is_read) {
@@ -323,24 +316,7 @@ onMounted(() => {
   background: transparent;
 }
 
-.unread-dot {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 10px;
-  height: 10px;
-  background-color: #f53f3f;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  z-index: 10;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
 
-.info-meta {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
 
 .page-header {
   display: flex;
@@ -373,6 +349,7 @@ onMounted(() => {
   width: 260px;
 }
 
+/* Grid Layout */
 .video-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -389,6 +366,9 @@ onMounted(() => {
   box-sizing: border-box;
   cursor: pointer;
   transition: transform 0.1s ease, box-shadow 0.1s ease;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-sm:hover {
@@ -419,6 +399,10 @@ onMounted(() => {
   border-radius: 4px;
 }
 
+.card-sm:hover .delete-btn {
+  opacity: 1;
+}
+
 .format-label {
   position: absolute;
   top: 8px;
@@ -434,16 +418,25 @@ onMounted(() => {
   pointer-events: none;
 }
 
-.card-sm:hover .delete-btn {
-  opacity: 1;
+.unread-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 10px;
+  height: 10px;
+  background-color: #f53f3f;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
 .card-cover-box {
   width: 100%;
-  height: 160px;
-  background: #f5f5f5;
-  border-bottom: 3px solid #323232;
+  aspect-ratio: 16/9;
   overflow: hidden;
+  background: #323232;
+  border-bottom: 3px solid #323232;
   position: relative;
 }
 
@@ -451,29 +444,28 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 0.5s ease;
 }
 
 .card-sm:hover .card-cover-img {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .card-icon-placeholder {
   width: 100%;
-  height: 160px;
+  aspect-ratio: 16/9;
+  background-color: #f0f0f0;
+  border-bottom: 3px solid #323232;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f4dbda;
-  border-bottom: 3px solid #323232;
 }
 
 .card-info-section {
-  padding: 16px;
+  padding: 12px;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   background: #fff;
 }
 
@@ -481,7 +473,8 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 800;
   color: #323232;
-  line-height: 1.4;
+  margin-bottom: 6px;
+  line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -489,30 +482,42 @@ onMounted(() => {
 }
 
 .info-desc {
-  font-size: 13px;
+  font-size: 12px;
   color: #666;
-  line-height: 1.5;
+  line-height: 1.4;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  margin-bottom: 12px;
+  flex: 1;
 }
 
 .tags-container {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
+  margin-bottom: 12px;
 }
 
 .tag-badge {
-  font-size: 11px;
-  background-color: #f2f3f5;
-  color: #1d2129;
-  padding: 2px 8px;
+  font-size: 10px;
+  color: #323232;
+  background: #e0e0e0;
+  padding: 2px 6px;
   border-radius: 4px;
+  white-space: nowrap;
+  font-weight: 700;
+  border: 1px solid #323232;
+}
+
+.info-meta {
+  font-size: 11px;
+  color: #888;
+  margin-top: auto;
+  border-top: 2px solid #f0f0f0;
+  padding-top: 8px;
   font-weight: 600;
-  border: 1px solid #e5e6eb;
 }
 
 .empty-state {
