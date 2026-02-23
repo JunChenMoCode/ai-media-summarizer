@@ -73,18 +73,15 @@
             style="width: 100%; height: 100%; overflow-y: auto; background: white;"
           />
 
-          <!-- Text/MD Preview (Show Extracted Text) -->
-          <div 
-            v-else 
-            class="file-preview-text"
-            style="padding: 20px; overflow-y: auto; height: 100%; background: var(--surface-1); color: var(--text-1); white-space: pre-wrap; font-family: monospace;"
-          >
-             <div v-if="fileContent">
-                {{ fileContent }}
-             </div>
-             <div v-else class="preview-unavailable" style="display: flex; align-items: center; justify-content: center; height: 100%;">
-                <p>Preview not available</p>
-             </div>
+          <!-- MD Preview -->
+          <div v-else-if="fileType === '.md'" class="markdown-body" style="padding: 20px; overflow-y: auto; height: 100%; background: var(--surface-1);" v-html="renderedFilePreview"></div>
+
+          <!-- Text Preview (Show Extracted Text) -->
+          <div v-else class="file-preview-text" style="padding: 20px; overflow-y: auto; height: 100%; background: var(--surface-1); color: var(--text-1); white-space: pre-wrap; font-family: monospace;">
+            <div v-if="fileContent">{{ fileContent }}</div>
+            <div v-else class="preview-unavailable" style="display: flex; align-items: center; justify-content: center; height: 100%;">
+              <p>Preview not available</p>
+            </div>
           </div>
         </div>
 
@@ -113,9 +110,14 @@
           </a-button>
           <div class="summary-header-title" :title="currentContentTitle">{{ currentContentTitle }}</div>
         </div>
+        <div class="summary-tags-bar" v-if="analysisData?.tags && analysisData.tags.length">
+            <span v-for="(tag, idx) in analysisData.tags" :key="idx" class="tag-badge">
+              #{{ tag }}
+            </span>
+        </div>
         <a-tabs v-model:active-key="activeRightTab" type="line" size="medium" :animation="true" class="summary-tabs">
           <!-- Tab 1: Detail -->
-          <a-tab-pane key="detail" title="图文详解">
+          <a-tab-pane key="detail" title="文稿笔记">
             <div class="detail-text-area" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; position: relative;">
                <FloatingToggle v-model="isEditable" @change="toggleEditable" />
                <div v-show="isEditable" ref="editorRef" style="height: 100%;"></div>
@@ -187,11 +189,21 @@
                   @keydown.enter.exact.prevent="handleChatSend"
                 />
                 <a-button type="primary" :loading="chatLoading" @click="handleChatSend">发送</a-button>
-              </div>
-            </div>
-          </a-tab-pane>
-        </a-tabs>
       </div>
+    </div>
+  </a-tab-pane>
+</a-tabs>
+
+<a-modal v-model:visible="showTitleModal" title="开始分析" @ok="startAnalysis" :ok-text="'开始分析'" :cancel-text="'取消'">
+  <div style="padding: 20px;">
+    <p style="margin-bottom: 16px;">请选择分析结果的标题命名方式：</p>
+    <a-radio-group v-model="titlePreference" direction="vertical">
+      <a-radio value="ai">使用 AI 生成的标题 (推荐)</a-radio>
+      <a-radio value="filename">使用原文件名</a-radio>
+    </a-radio-group>
+  </div>
+</a-modal>
+</div>
     </div>
   </div>
 </template>
@@ -260,6 +272,8 @@ const mindmapData = ref(null)
 const mindmapLoading = ref(false)
 const localFileInputRef = ref(null)
 const fileDragActive = ref(false)
+const showTitleModal = ref(false)
+const titlePreference = ref('ai')
 
 // Editor state
 const editorRef = ref(null)
@@ -412,16 +426,55 @@ const renderedReport = computed(() => {
   }
 })
 
+const decodeTitle = (s) => {
+  const v = String(s || '').trim()
+  if (!v) return v
+  if (!/%[0-9A-Fa-f]{2}/.test(v)) return v
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
+const inferFileType = (nameOrUrl, mimeType) => {
+  const n = String(nameOrUrl || '').trim()
+  if (n) {
+    const clean = n.split('?', 1)[0].split('#', 1)[0]
+    const idx = clean.lastIndexOf('.')
+    if (idx > -1 && idx < clean.length - 1) {
+      return '.' + clean.slice(idx + 1).toLowerCase()
+    }
+  }
+  const mt = String(mimeType || '').toLowerCase()
+  if (mt.includes('markdown')) return '.md'
+  if (mt.includes('pdf')) return '.pdf'
+  if (mt.includes('word')) return '.docx'
+  if (mt.includes('powerpoint') || mt.includes('presentation')) return '.pptx'
+  if (mt.includes('text')) return '.txt'
+  return ''
+}
+
 const currentContentTitle = computed(() => {
-  const analysisTitle = String(analysisData.value?.title || '').trim()
+  const analysisTitle = decodeTitle(analysisData.value?.title || '')
   if (analysisTitle) return analysisTitle
   const localName = String(fileObj.value?.name || '').trim()
   if (localName) return localName
-  const path = String(filePath.value || '').trim()
+  const path = decodeTitle(filePath.value || '')
   if (path) return path
-  const url = String(fileUrlInput.value || fileUrl.value || '').trim()
+  const url = decodeTitle(fileUrlInput.value || fileUrl.value || '')
   if (url) return url
   return '未加载内容'
+})
+
+const renderedFilePreview = computed(() => {
+  if (fileType.value !== '.md') return ''
+  if (!fileContent.value) return ''
+  try {
+    return marked.parse(fileContent.value, { gfm: true, breaks: true })
+  } catch (e) {
+    return fileContent.value
+  }
 })
 
 // Methods
@@ -590,6 +643,7 @@ const buildConfig = () => ({
   device: configStore.device || 'cpu',
   compute_type: configStore.compute_type || 'int8',
   capture_offset: Number(configStore.capture_offset) || 0,
+  title_preference: titlePreference.value,
 })
 
 const loadFromMd5 = async (md5) => {
@@ -613,9 +667,11 @@ const loadFromMd5 = async (md5) => {
     }
     fileUrl.value = pUrl
     filePath.value = payload?.asset?.source_ref || ''
+    fileType.value = inferFileType(payload?.asset?.display_name || payload?.asset?.source_ref || '', payload?.asset?.mime_type)
 
     const analysis = pick('ai_analysis')?.json || null
-    const reportText = pick('report_markdown')?.text || ''
+    const reportArtifact = pick('report_markdown')
+    const reportText = reportArtifact?.text || reportArtifact?.json?.content || ''
     analysisData.value = analysis
     report.value = reportText
 
@@ -637,6 +693,8 @@ const loadFromMd5 = async (md5) => {
       display_name: payload?.asset?.display_name,
       created_at: payload?.asset?.created_at,
       asset_type: payload?.asset?.asset_type,
+      mime_type: payload?.asset?.mime_type || analysis?.mime_type,
+      title: analysis?.title || payload?.asset?.display_name,
       content_json: analysis
     })
 
@@ -720,6 +778,14 @@ const handleSubmit = async () => {
     return
   }
 
+  showTitleModal.value = true
+}
+
+const startAnalysis = async () => {
+  showTitleModal.value = false
+  const hasUploadFile = !!fileObj.value
+  const hasUrl = !!fileUrl.value
+
   loading.value = true
   progressPercent.value = 0
   progressMsg.value = 'Analyzing...'
@@ -735,12 +801,11 @@ const handleSubmit = async () => {
       if (hasUploadFile) {
           formData.append('file', fileObj.value)
       } else {
-          // Create a file from content
-          if (fileContent.value) {
+          if (hasUrl) {
+             formData.append('file_url', fileUrl.value)
+          } else if (fileContent.value) {
             const blob = new Blob([fileContent.value || ''], { type: 'text/plain' })
             formData.append('file', blob, 'imported.txt')
-          } else if (hasUrl) {
-             formData.append('file_url', fileUrl.value)
           }
       }
 
@@ -1748,31 +1813,27 @@ const handleChatSend = async () => {
   overflow: hidden;
 }
 
-/* Custom Scrollbar */
-.transcript-list::-webkit-scrollbar,
-.detail-text-area::-webkit-scrollbar,
-.chat-messages::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.summary-tags-bar {
+  padding: 8px 20px;
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--card-border);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.transcript-list::-webkit-scrollbar-thumb,
-.detail-text-area::-webkit-scrollbar-thumb,
-.chat-messages::-webkit-scrollbar-thumb {
-  background: var(--text-muted);
-  border-radius: 3px;
-  opacity: 0.5;
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #e0e0e0;
+  color: #323232;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #323232;
 }
 
-.transcript-list::-webkit-scrollbar-track,
-.detail-text-area::-webkit-scrollbar-track,
-.chat-messages::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* Custom Scrollbar - Use global styles instead */
 
-.transcript-list::-webkit-scrollbar-button,
-.detail-text-area::-webkit-scrollbar-button,
-.chat-messages::-webkit-scrollbar-button {
-  display: none;
-}
 </style>

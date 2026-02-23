@@ -41,7 +41,7 @@
             </a-button>
 
             <!-- Format Label -->
-            <div class="format-label">
+            <div class="format-label" v-if="getFormatLabel(item)">
               {{ getFormatLabel(item) }}
             </div>
 
@@ -56,7 +56,7 @@
               <img 
                 :src="getCoverUrl(item)" 
                 alt="Cover" 
-                class="card-cover-img"
+                :class="['card-cover-img', { 'default-cover-img': isDefaultCover(getCoverUrl(item)) }]"
               />
             </div>
             <div v-else class="card-icon-placeholder">
@@ -68,8 +68,8 @@
 
             <!-- Info Section -->
             <div class="card-info-section">
-              <div class="info-title" :title="item.content_json?.title || item.display_name || item.md5">
-                {{ item.content_json?.title || item.display_name || item.md5 }}
+              <div class="info-title" :title="getItemTitle(item)">
+                {{ getItemTitle(item) }}
               </div>
               <div class="info-desc" :title="item.content_json?.summary">
                 {{ item.content_json?.summary || '暂无摘要' }}
@@ -100,6 +100,10 @@ import { Message, Modal } from '@arco-design/web-vue'
 import { IconDelete } from '@arco-design/web-vue/es/icon'
 import { useConfigStore } from '../stores/config'
 import { useHistoryStore } from '../stores/history'
+import coverMD from '../assert/author_bg_card/MD.jpg'
+import coverMP4 from '../assert/author_bg_card/MP4.jpg'
+import coverPDF from '../assert/author_bg_card/PDF.jpg'
+import coverTXT from '../assert/author_bg_card/TXT.jpg'
 
 const router = useRouter()
 const configStore = useConfigStore()
@@ -112,14 +116,26 @@ const loading = ref(false)
 const keyword = ref('')
 
 const norm = (s) => String(s || '').trim().toLowerCase()
+const decodeTitle = (s) => {
+  const v = String(s || '').trim()
+  if (!v) return v
+  if (!/%[0-9A-Fa-f]{2}/.test(v)) return v
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
+const getItemTitle = (item) => decodeTitle(item?.content_json?.title || item?.display_name || item?.md5)
 
 const filteredItems = computed(() => {
   if (!keyword.value) return items.value
   const kw = keyword.value.toLowerCase()
   return items.value.filter(item => {
-    const title = (item.content_json?.title || '').toLowerCase()
+    const title = decodeTitle(item.content_json?.title || '').toLowerCase()
     const md5 = (item.md5 || '').toLowerCase()
-    const dn = (item.display_name || '').toLowerCase()
+    const dn = decodeTitle(item.display_name || '').toLowerCase()
     return title.includes(kw) || md5.includes(kw) || dn.includes(kw)
   })
 })
@@ -214,15 +230,24 @@ const formatTime = (ts) => {
 }
 
 const getCoverUrl = (item) => {
+  const getDefault = () => {
+    const fmt = getFormatLabel(item)
+    if (fmt === 'MD') return coverMD
+    if (fmt === 'PDF') return coverPDF
+    if (fmt === 'TXT') return coverTXT
+    if (fmt === 'MP4') return coverMP4
+    return ''
+  }
+
   let segments = item.content_json?.segments
-  if (!segments) return ''
+  if (!segments) return getDefault()
   
   // Convert dict to list if needed
   if (!Array.isArray(segments) && typeof segments === 'object') {
     segments = Object.values(segments)
   }
   
-  if (!Array.isArray(segments) || !segments.length) return ''
+  if (!Array.isArray(segments) || !segments.length) return getDefault()
   
   // Sort by timestamp to ensure we get the first one chronologically
   const sortedSegments = [...segments].sort((a, b) => {
@@ -230,10 +255,10 @@ const getCoverUrl = (item) => {
   })
   
   // Try to find image_url first (presigned url), then image_path
-    const firstSeg = sortedSegments[0]
-    const path = firstSeg.image_url || firstSeg.image_path
-    
-    if (!path) return ''
+  const firstSeg = sortedSegments[0]
+  const path = firstSeg.image_url || firstSeg.image_path
+  
+  if (!path) return getDefault()
   
   // If it's already a full URL (http...), return it
   if (path.startsWith('http') || path.startsWith('blob:')) return path
@@ -246,45 +271,72 @@ const getCoverUrl = (item) => {
   return `${baseUrl}/static/${cleanPath}`
 }
 
+const isDefaultCover = (url) => {
+  return url === coverMD || url === coverPDF || url === coverTXT || url === coverMP4
+}
+
 const getFormatLabel = (item) => {
-  // Fix for plugin/extension items (Bilibili/YouTube) showing as TXT
-  // If it comes from a URL source (plugin uses URL), and it's not explicitly audio/doc, treat as MP4
-  const sk = String(item.source_kind || '').toLowerCase()
-  const ref = String(item.source_ref || '').toLowerCase()
-  
-  if (sk === 'url' || ref.includes('bilibili.com') || ref.includes('youtube.com') || ref.includes('youtu.be')) {
-      if (item.media_type === 'audio') return 'MP3'
-      // If it's a video or unknown, default to MP4 for plugin items
-      return 'MP4'
+  // 1. 优先使用 display_name 或 content_json.title 的后缀名
+  const name = String(item.display_name || item.content_json?.title || '').trim()
+  if (name) {
+    const parts = name.split('.')
+    if (parts.length > 1) {
+      const ext = parts.pop().toUpperCase()
+      // 常见文档/音视频格式直接返回
+      if (['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX', 'TXT', 'MD', 'MP4', 'MP3', 'MOV', 'AVI', 'MKV', 'WAV', 'M4A'].includes(ext)) {
+        return ext
+      }
+    }
   }
 
+  // 2. 其次检查 mime_type
   if (item.mime_type) {
     const mt = item.mime_type.toLowerCase()
     if (mt.includes('pdf')) return 'PDF'
     if (mt.includes('word') || mt.includes('document')) return 'DOCX'
     if (mt.includes('powerpoint') || mt.includes('presentation')) return 'PPTX'
-    if (mt.includes('text') || mt.includes('plain')) return 'TXT'
     if (mt.includes('markdown')) return 'MD'
+    if (mt.includes('text') || mt.includes('plain')) return 'TXT'
+    if (mt.includes('octet-stream')) {
+        // 如果是 octet-stream，尝试再次从 display_name 提取，或者返回 'FILE'
+        if (item.display_name) {
+             const ext = item.display_name.split('.').pop()
+             if (ext && ext !== item.display_name) return ext.toUpperCase()
+        }
+        return 'FILE'
+    }
     
-    // e.g. "video/mp4" -> "MP4"
     const parts = item.mime_type.split('/')
     if (parts.length > 1) {
        return parts[1].toUpperCase()
     }
     return item.mime_type.toUpperCase()
   }
-  // Fallback to asset_type or extension from display_name
-  if (item.display_name) {
-      const ext = item.display_name.split('.').pop()
-      if (ext && ext !== item.display_name) return ext.toUpperCase()
-  }
-  return (item.asset_type || 'UNKNOWN').toUpperCase()
+
+  // 3. 其次检查 asset_type
+  const at = (item.asset_type || '').toUpperCase()
+  if (at === 'VIDEO' || at === 'AUDIO' || at === 'UNKNOWN') return 'VIDEO'
+  if (at === 'DOCUMENT' || at === 'FILE') return 'DOC'
+
+  // 4. 内容特征检查
+  // 如果有 segments，通常是音视频
+  if (item.content_json?.segments?.length > 0) return 'VIDEO'
+
+  // 5. 来源 URL 特征
+  const sr = String(item.source_ref || '').toLowerCase()
+  if (sr.includes('bilibili')) return 'BILI'
+  if (sr.includes('youtube') || sr.includes('youtu.be')) return 'YT'
+
+  return at || 'FILE'
 }
 
 const handleDelete = async (item) => {
+  const name = getItemTitle(item)
+  const at = String(item?.asset_type || '').trim().toLowerCase()
+  const kind = at === 'document' || at === 'file' ? '文档' : '视频'
   Modal.warning({
     title: '确认删除',
-    content: `确定要删除视频 "${item.display_name || item.md5}" 及其所有分析数据吗？此操作不可恢复。`,
+    content: `确定要删除${kind} "${name}" 及其所有分析数据吗？此操作不可恢复。`,
     hideCancel: false,
     onOk: async () => {
       try {
@@ -447,6 +499,10 @@ onMounted(() => {
   transition: transform 0.5s ease;
 }
 
+.default-cover-img {
+  object-position: 50% 35%;
+}
+
 .card-sm:hover .card-cover-img {
   transform: scale(1.05);
 }
@@ -541,4 +597,3 @@ onMounted(() => {
   color: var(--text-muted);
 }
 </style>
-

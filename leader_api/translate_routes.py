@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from .models import TranslateRequest
+from .models import TranslateRequest, ConfigModel
+from .mysql_store import load_app_config
 from .translate import translate_lines
 
 router = APIRouter()
@@ -33,9 +34,25 @@ async def translate_subtitles(request: TranslateRequest):
     try:
         import asyncio
 
+        config_data = load_app_config()
+        if not config_data:
+            raise RuntimeError("数据库配置为空，请先在前端设置并保存")
+        config = ConfigModel(
+            openai_api_key=config_data.get("openai_api_key", ""),
+            openai_base_url=config_data.get("openai_base_url", ""),
+            llm_model=config_data.get("llm_model", ""),
+            ocr_engine=str(config_data.get("ocr_engine", "vl")),
+            vl_model=str(config_data.get("vl_model", "Pro/Qwen/Qwen2-VL-7B-Instruct")),
+            vl_base_url=str(config_data.get("vl_base_url", "https://api.siliconflow.cn/v1")),
+            vl_api_key=str(config_data.get("vl_api_key", "")),
+            model_size=config_data.get("model_size", "medium"),
+            device=config_data.get("device", "cuda"),
+            compute_type=config_data.get("compute_type", "float16"),
+            capture_offset=float(config_data.get("capture_offset", 5.0)),
+        )
         source_lang = _detect_source_lang(lines)
         target_lang = "en" if source_lang == "zh" else "zh"
-        translated_texts = await asyncio.to_thread(translate_lines, lines, request.config.device)
+        translated_texts = await asyncio.to_thread(translate_lines, lines, config.device)
         translations = [{"index": i, "text": text} for i, text in enumerate(translated_texts)]
         try:
             if request.video_md5:

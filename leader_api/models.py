@@ -20,10 +20,10 @@ class ConfigModel(BaseModel):
     vl_base_url: str = "https://api.siliconflow.cn/v1"
     vl_api_key: str = ""
 
-    model_size: str
-    device: str
-    compute_type: str
-    capture_offset: float
+    model_size: str | None = None
+    device: str | None = None
+    compute_type: str | None = None
+    capture_offset: float | None = None
 
 
 class TranscriptLine(BaseModel):
@@ -80,6 +80,7 @@ class ImportVideoUrlRequest(BaseModel):
 class AnalyzePathRequest(BaseModel):
     video_path: str
     config: ConfigModel
+    selected_images: list[str] | None = None
 
 
 class PresignUploadRequest(BaseModel):

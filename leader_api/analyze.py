@@ -26,6 +26,7 @@ from .minio_store import (
     minio_remove_folder,
 )
 from .models import AnalyzePathRequest
+from .mysql_store import load_app_config
 
 router = APIRouter()
 
@@ -70,7 +71,14 @@ async def analyze_video_by_path(req: FastAPIRequest, request: AnalyzePathRequest
 
     async def event_generator():
         try:
-            config = request.config.model_dump()
+            config = load_app_config()
+            if not config:
+                raise RuntimeError("数据库配置为空，请先在前端设置并保存")
+            print(f">>> [DEBUG] analyze_path config: {config}")
+            # Ensure empty strings in config are None so FastVideoAnalyzer can handle defaults correctly?
+            # No, FastVideoAnalyzer logic is: if v is not None and str(v).strip(): self.config[k] = v
+            # So if we pass "", it won't override. But if we pass "sk-...", it will.
+            
             yield json.dumps({"status": "progress", "message": "视频加载成功，开始分析..."}) + "\n"
 
             queue: asyncio.Queue[str] = asyncio.Queue()
@@ -136,6 +144,7 @@ async def analyze_video_by_path(req: FastAPIRequest, request: AnalyzePathRequest
                     output_dir,
                     config=config,
                     progress_callback=lambda m: queue.put_nowait(m),
+                    selected_images=request.selected_images
                 )
                 task = asyncio.create_task(asyncio.to_thread(analyzer.run))
 
@@ -147,6 +156,28 @@ async def analyze_video_by_path(req: FastAPIRequest, request: AnalyzePathRequest
                         continue
 
                 ai_analysis = task.result()
+
+                # Override title if user prefers filename
+                if ai_analysis and config.get("title_preference") == "filename":
+                    original_name = ""
+                    # 1. Try to get filename from MinIO object key
+                    if video_object_key:
+                        original_name = os.path.basename(video_object_key)
+                        # Handle potential URL encoding or "uploads/uuid/filename"
+                        # But normalize_video_object_key might have kept it clean?
+                        # Usually it is clean enough.
+                    # 2. Try to get filename from URL
+                    elif video_url:
+                        try:
+                            path = urlparse(video_url).path
+                            original_name = os.path.basename(path)
+                            from urllib.parse import unquote
+                            original_name = unquote(original_name)
+                        except:
+                            pass
+                    
+                    if original_name and isinstance(ai_analysis, dict):
+                        ai_analysis["title"] = original_name
 
                 # 少数情况下 analyzer 读取 presigned URL 可能失败（取决于 ffmpeg/网络）
                 # 这里保留旧逻辑：失败时把视频下载到临时文件再跑一次。
@@ -333,7 +364,10 @@ async def get_analysis_by_md5(video_md5: str):
                 access_url = sr
             elif sk == "local" and sr:
                  # Assume local static file
-                 access_url = f"/static/{sr}"
+                 if sr.startswith("/static/") or sr.startswith("static/"):
+                     access_url = f"/{sr.lstrip('/')}"
+                 else:
+                     access_url = f"/static/{sr}"
         except Exception:
             access_url = ""
         data["access"] = {"primary_url": access_url}
@@ -343,6 +377,12 @@ async def get_analysis_by_md5(video_md5: str):
         
         # 1. ai_analysis
         ai_list = artifacts.get("ai_analysis", [])
+        fallback_title = (
+            (asset.get("display_name") or "").strip()
+            or os.path.basename((asset.get("source_ref") or "").replace("\\", "/"))
+            or (asset.get("md5") or "").strip()
+            or video_md5
+        )
         
         # Helper to get job_id from asset if missing in artifact
         asset_meta = asset.get("meta_json")
@@ -373,6 +413,9 @@ async def get_analysis_by_md5(video_md5: str):
                 is_local = False
                 if asset.get("source_kind") == "local":
                     is_local = True
+
+                if isinstance(cj, dict) and not str(cj.get("title") or "").strip():
+                    cj["title"] = fallback_title
 
                 if isinstance(cj, dict) and "segments" in cj and isinstance(cj["segments"], list):
                     for seg in cj["segments"]:
@@ -545,8 +588,16 @@ async def list_analyses(
             if not it.get("display_name") and sr:
                 it["display_name"] = os.path.basename(sr.replace("\\", "/"))
 
-            # Refresh image URLs in content_json (cover images)
             cj = it.get("content_json")
+            fallback_title = (
+                (it.get("display_name") or "").strip()
+                or os.path.basename(sr.replace("\\", "/"))
+                or (it.get("md5") or "").strip()
+            )
+            if isinstance(cj, dict) and not str(cj.get("title") or "").strip():
+                cj["title"] = fallback_title
+
+            # Refresh image URLs in content_json (cover images)
             if isinstance(cj, dict) and "segments" in cj and isinstance(cj["segments"], list):
                 job_id = ""
                 meta = it.get("meta")

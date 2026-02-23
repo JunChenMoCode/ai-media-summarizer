@@ -1,10 +1,9 @@
 import json
-import os
-
 from fastapi import APIRouter, HTTPException, WebSocket
 from openai import AsyncOpenAI, BadRequestError
 
 from .models import ConfigModel, MindMapRequest, NotesRequest
+from .mysql_store import load_app_config
 
 router = APIRouter()
 
@@ -36,16 +35,17 @@ async def websocket_chat(websocket: WebSocket):
             messages = data["messages"]
             transcript = data.get("transcript", "")
             summary = data.get("summary", "")
-            config_data = data.get("config", {})
         else:
             messages = [{"role": "user", "content": "Hello"}]
             transcript = ""
             summary = ""
-            config_data = {}
 
         video_md5 = (data.get("video_md5", "") or "").strip().lower()
 
         # 仅提取我们真正会用到的字段，避免把旧字段带进来造成困扰
+        config_data = load_app_config()
+        if not config_data:
+            raise RuntimeError("数据库配置为空，请先在前端设置并保存")
         config = ConfigModel(
             openai_api_key=config_data.get("openai_api_key", ""),
             openai_base_url=config_data.get("openai_base_url", ""),
@@ -197,7 +197,23 @@ async def generate_mindmap(request: MindMapRequest):
     注意：
     - 该接口要求“只返回 JSON”，因此这里会做一次代码块围栏清理，再 json.loads。
     """
-    client = AsyncOpenAI(api_key=request.config.openai_api_key, base_url=request.config.openai_base_url)
+    config_data = load_app_config()
+    if not config_data:
+        raise RuntimeError("数据库配置为空，请先在前端设置并保存")
+    config = ConfigModel(
+        openai_api_key=config_data.get("openai_api_key", ""),
+        openai_base_url=config_data.get("openai_base_url", ""),
+        llm_model=config_data.get("llm_model", ""),
+        ocr_engine=str(config_data.get("ocr_engine", "vl")),
+        vl_model=str(config_data.get("vl_model", "Pro/Qwen/Qwen2-VL-7B-Instruct")),
+        vl_base_url=str(config_data.get("vl_base_url", "https://api.siliconflow.cn/v1")),
+        vl_api_key=str(config_data.get("vl_api_key", "")),
+        model_size=config_data.get("model_size", "medium"),
+        device=config_data.get("device", "cuda"),
+        compute_type=config_data.get("compute_type", "float16"),
+        capture_offset=float(config_data.get("capture_offset", 5.0)),
+    )
+    client = AsyncOpenAI(api_key=config.openai_api_key, base_url=config.openai_base_url)
 
     system_prompt = """
 你是一个思维导图专家。请根据用户提供的视频字幕内容，生成一个结构化的思维导图数据。
@@ -228,8 +244,7 @@ async def generate_mindmap(request: MindMapRequest):
 """
 
     try:
-        model_name = request.config.llm_model
-        fallback_model = os.getenv("LLM_MODEL", "").strip()
+        model_name = config.llm_model
 
         try:
             response = await client.chat.completions.create(
@@ -242,17 +257,7 @@ async def generate_mindmap(request: MindMapRequest):
         except Exception as e:
             error_str = str(e)
             if "Model does not exist" in error_str or "400" in error_str:
-                if fallback_model and fallback_model != model_name:
-                    print(f"Primary model {model_name} failed, trying fallback: {fallback_model}")
-                    response = await client.chat.completions.create(
-                        model=fallback_model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": f"视频字幕内容如下：\n{request.transcript[:20000]}"},
-                        ],
-                    )
-                else:
-                    raise e
+                raise e
             else:
                 raise e
 
@@ -274,7 +279,7 @@ async def generate_mindmap(request: MindMapRequest):
                     artifact_type="mindmap_g6",
                     artifact_version=1,
                     content_json=result,
-                    artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+                    artifact_meta={"config": _sanitize_config(config.model_dump())},
                 )
         except Exception:
             pass
@@ -309,8 +314,24 @@ async def generate_notes(request: NotesRequest):
 6. 不要包含“视频”、“字幕”等词汇，直接呈现知识内容。
 """
 
-    model_name = request.config.llm_model
-    client = AsyncOpenAI(api_key=request.config.openai_api_key, base_url=request.config.openai_base_url)
+    config_data = load_app_config()
+    if not config_data:
+        raise RuntimeError("数据库配置为空，请先在前端设置并保存")
+    config = ConfigModel(
+        openai_api_key=config_data.get("openai_api_key", ""),
+        openai_base_url=config_data.get("openai_base_url", ""),
+        llm_model=config_data.get("llm_model", ""),
+        ocr_engine=str(config_data.get("ocr_engine", "vl")),
+        vl_model=str(config_data.get("vl_model", "Pro/Qwen/Qwen2-VL-7B-Instruct")),
+        vl_base_url=str(config_data.get("vl_base_url", "https://api.siliconflow.cn/v1")),
+        vl_api_key=str(config_data.get("vl_api_key", "")),
+        model_size=config_data.get("model_size", "medium"),
+        device=config_data.get("device", "cuda"),
+        compute_type=config_data.get("compute_type", "float16"),
+        capture_offset=float(config_data.get("capture_offset", 5.0)),
+    )
+    model_name = config.llm_model
+    client = AsyncOpenAI(api_key=config.openai_api_key, base_url=config.openai_base_url)
 
     async def call_llm(model: str):
         return await client.chat.completions.create(
@@ -354,7 +375,7 @@ async def generate_notes(request: NotesRequest):
                 artifact_type="notes_markdown",
                 artifact_version=1,
                 content_text=content,
-                artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+                artifact_meta={"config": _sanitize_config(config.model_dump())},
             )
     except Exception:
         pass

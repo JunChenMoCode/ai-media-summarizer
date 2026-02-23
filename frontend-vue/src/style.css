@@ -87,8 +87,8 @@ body {
 
 /* Global Scrollbar Styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -104,4 +104,24 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-main);
   opacity: 0.5;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-button:single-button {
+  width: 0;
+  height: 0;
+  display: none;
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-sub) transparent;
 }

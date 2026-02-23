@@ -13,7 +13,7 @@
               <a-form-item field="openai_api_key" label="API KEY" required>
                 <a-input-password 
                   v-model="form.openai_api_key" 
-                  placeholder="sk-uovxekbxvyvmddkormbfavimspfvcwmbhnkopzdkppozdugf" 
+                  placeholder="Enter your API key" 
                   class="custom-input"
                 />
               </a-form-item>
@@ -106,7 +106,7 @@
           <a-grid :cols="24" :col-gap="24" :row-gap="16">
             <a-grid-item :span="12">
               <a-form-item field="model_size" label="WHISPER SIZE">
-                <a-select v-model="form.model_size" class="custom-select">
+                <a-select v-model="form.model_size" class="custom-select" allow-clear placeholder="Default (Server Config)">
                   <a-option value="small">small</a-option>
                   <a-option value="medium">medium</a-option>
                   <a-option value="large-v3">large-v3</a-option>
@@ -120,12 +120,14 @@
                   :min="0" 
                   :precision="1" 
                   class="custom-input"
+                  placeholder="Default (Server Config)"
+                  allow-clear
                 />
               </a-form-item>
             </a-grid-item>
             <a-grid-item :span="12">
               <a-form-item field="device" label="DEVICE">
-                <a-select v-model="form.device" class="custom-select">
+                <a-select v-model="form.device" class="custom-select" allow-clear placeholder="Default (Server Config)">
                   <a-option value="cuda">cuda (GPU)</a-option>
                   <a-option value="cpu">cpu (Slow)</a-option>
                 </a-select>
@@ -133,7 +135,7 @@
             </a-grid-item>
             <a-grid-item :span="12">
               <a-form-item field="compute_type" label="COMPUTE TYPE">
-                <a-select v-model="form.compute_type" class="custom-select">
+                <a-select v-model="form.compute_type" class="custom-select" allow-clear placeholder="Default (Server Config)">
                   <a-option value="float16">float16</a-option>
                   <a-option value="int8">int8</a-option>
                 </a-select>
@@ -174,12 +176,52 @@ const form = reactive({
   capture_offset: configStore.capture_offset,
 })
 
-const handleSave = () => {
+const handleSave = async (e) => {
+  if (e && typeof e.preventDefault === 'function') {
+    e.preventDefault()
+  }
   configStore.updateConfig(form)
-  Message.success({
-    content: 'Configuration saved successfully',
-    closable: true
-  })
+  const base = (form.backend_base_url || '').replace(/\/+$/, '')
+  if (base) {
+    try {
+      const payload = {
+        openai_api_key: form.openai_api_key,
+        openai_base_url: form.openai_base_url,
+        llm_model: form.llm_model,
+        ocr_engine: form.ocr_engine,
+        vl_model: form.vl_model,
+        vl_base_url: form.vl_base_url,
+        vl_api_key: form.vl_api_key,
+        model_size: form.model_size,
+        device: form.device,
+        compute_type: form.compute_type,
+        capture_offset: form.capture_offset,
+      }
+      const res = await fetch(`${base}/tasks/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: payload }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+      Message.success({
+        content: 'Configuration saved successfully',
+        closable: true
+      })
+    } catch (err) {
+      Message.error({
+        content: `Save failed: ${err.message || err}`,
+        closable: true
+      })
+    }
+  } else {
+    Message.warning({
+      content: 'Please set backend URL first',
+      closable: true
+    })
+  }
 }
 </script>
 

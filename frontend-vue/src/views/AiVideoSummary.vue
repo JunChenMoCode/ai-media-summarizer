@@ -246,7 +246,7 @@
             <div class="detail-text-area" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; position: relative;">
                <FloatingToggle v-model="isEditable" @change="toggleEditable" />
                <div v-show="isEditable" ref="editorRef" style="height: 100%;"></div>
-               <div v-if="!isEditable" class="markdown-body" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderedReport"></div>
+               <div v-if="!isEditable" class="markdown-body detail-content-scrollable" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderedReport"></div>
             </div>
           </a-tab-pane>
 
@@ -260,7 +260,7 @@
               <div v-else-if="notesData || isNotesEditable" style="height: 100%; display: flex; flex-direction: column; position: relative;">
                  <FloatingToggle v-model="isNotesEditable" @change="toggleNotesEditable" />
                  <div v-show="isNotesEditable" ref="notesEditorRef" style="height: 100%;"></div>
-                 <div v-if="!isNotesEditable" class="markdown-body" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderMarkdown(notesData)"></div>
+                 <div v-if="!isNotesEditable" class="markdown-body notes-content-scrollable" style="padding: 20px; overflow-y: auto; height: 100%;" v-html="renderMarkdown(notesData)"></div>
               </div>
               <div v-else class="empty-state">
                 <icon-book-open :style="{ fontSize: '48px', color: 'var(--text-muted)' }" />
@@ -281,6 +281,27 @@
                   <icon-file-text :style="{ fontSize: '48px', color: 'var(--text-muted)' }" />
                   <p>暂无文稿数据</p>
                </div>
+            </div>
+          </a-tab-pane>
+
+          <!-- Tab: Terms -->
+          <a-tab-pane key="terms" title="专业术语">
+            <div class="terms-tab-content">
+              <div v-if="analysisData && (analysisData.terms || analysisData.vocabulary || analysisData.keywords) && (analysisData.terms || analysisData.vocabulary || analysisData.keywords).length" class="terms-list">
+                <div v-for="(item, idx) in (analysisData.terms || analysisData.vocabulary || analysisData.keywords)" :key="idx" class="term-item">
+                  <div class="term-header">
+                    <span class="term-index">{{ idx + 1 }}</span>
+                    <span class="term-name">{{ typeof item === 'string' ? item : (item.term || item.name || item.keyword) }}</span>
+                  </div>
+                  <div class="term-desc" v-if="typeof item !== 'string' && (item.definition || item.description || item.meaning)">
+                    {{ item.definition || item.description || item.meaning }}
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-state">
+                <icon-book-open :style="{ fontSize: '48px', color: 'var(--text-muted)' }" />
+                <p>暂无专业术语数据</p>
+              </div>
             </div>
           </a-tab-pane>
 
@@ -438,6 +459,16 @@
         <p>暂无识别结果</p>
       </div>
     </a-modal>
+
+    <a-modal v-model:visible="showTitleModal" title="开始分析" @ok="startAnalysis" :ok-text="'开始分析'" :cancel-text="'取消'">
+      <div style="padding: 20px;">
+        <p style="margin-bottom: 16px;">请选择分析结果的标题命名方式：</p>
+        <a-radio-group v-model="titlePreference" direction="vertical">
+          <a-radio value="ai">使用 AI 生成的标题 (推荐)</a-radio>
+          <a-radio value="filename">使用原文件名</a-radio>
+        </a-radio-group>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -550,6 +581,8 @@ const coursewareOcrModalVisible = ref(false)
 const coursewareOcrResults = ref([])
 const localVideoInputRef = ref(null)
 const videoDragActive = ref(false)
+const showTitleModal = ref(false)
+const titlePreference = ref('ai')
 
 // Editor state
 const editorRef = ref(null)
@@ -1006,16 +1039,27 @@ const activeSegment = computed(() => {
   return current
 })
 
+const decodeTitle = (s) => {
+  const v = String(s || '').trim()
+  if (!v) return v
+  if (!/%[0-9A-Fa-f]{2}/.test(v)) return v
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
 const currentContentTitle = computed(() => {
-  const analysisTitle = String(analysisData.value?.title || '').trim()
-  const segTitle = String(activeSegment.value?.title || '').trim()
+  const analysisTitle = decodeTitle(analysisData.value?.title || '')
+  const segTitle = decodeTitle(activeSegment.value?.title || '')
   if (analysisTitle && segTitle && segTitle !== analysisTitle) return `${analysisTitle} · ${segTitle}`
   if (analysisTitle) return analysisTitle
   const localName = String(videoFile.value?.name || '').trim()
   if (localName) return localName
-  const path = String(videoPath.value || '').trim()
+  const path = decodeTitle(videoPath.value || '')
   if (path) return path
-  const url = String(videoUrlInput.value || videoUrl.value || '').trim()
+  const url = decodeTitle(videoUrlInput.value || videoUrl.value || '')
   if (url) return url
   return '未加载内容'
 })
@@ -1234,6 +1278,13 @@ const handleUrlSubmit = () => {
       transcriptData.value = []
       translatedTranscriptData.value = []
       Message.success(mediaType.value === 'audio' ? '音频解析成功' : '视频解析成功')
+      
+      // Auto start analysis after successful import
+      // Use nextTick to ensure state updates
+      nextTick(() => {
+          console.log('>>> Auto-starting analysis after import...')
+          handleSubmit()
+      })
     })
     .catch((e) => {
       Message.error(e?.message || '解析失败')
@@ -1519,26 +1570,34 @@ const loadFromMd5 = async (md5) => {
     const notes = pick('notes_markdown')?.text
     notesData.value = notes || ''
 
-    // 尝试加载 captured_frames (新逻辑: 列表存在单个 artifact 中) 或 captured_frame (旧逻辑: 多个 artifacts)
+    // 尝试加载 captured_frames (新逻辑: 列表存在单个 artifact 中) 和 captured_frame (旧逻辑: 多个 artifacts)
     let framesData = []
     const framesArtifact = pick('captured_frames')
     if (framesArtifact && Array.isArray(framesArtifact.json)) {
-      framesData = framesArtifact.json
-    } else if (Array.isArray(artifacts.captured_frame)) {
-      framesData = artifacts.captured_frame.map(x => x?.json)
+      framesData = framesData.concat(framesArtifact.json)
+    }
+    
+    if (Array.isArray(artifacts.captured_frame)) {
+      const manualFrames = artifacts.captured_frame.map(x => x?.json).filter(Boolean)
+      framesData = framesData.concat(manualFrames)
     }
 
     if (framesData.length) {
+      const seen = new Set()
       coursewareData.value = framesData
         .filter(Boolean)
         .map((x) => ({ url: resolveUrl(x.url), timestamp: x.timestamp, object_key: x.object_key }))
         .filter(item => {
+          if (seen.has(item.url)) return false
+          seen.add(item.url)
+          
           // Filter out cover images (timestamp < 1s)
           if (item.timestamp < 1) return false
           // Filter out images used in segments (detail view)
           if (usedImageUrls.has(item.url)) return false
           return true
         })
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
     }
 
     const lastChat = pick('chat_session')?.json
@@ -1552,6 +1611,8 @@ const loadFromMd5 = async (md5) => {
       display_name: payload?.asset?.display_name,
       created_at: payload?.asset?.created_at,
       asset_type: payload?.asset?.asset_type,
+      mime_type: payload?.asset?.mime_type || analysis?.mime_type,
+      title: analysis?.title || payload?.asset?.display_name,
       content_json: analysis
     })
 
@@ -1652,16 +1713,16 @@ const readSseResponse = async (response) => {
   }
 }
 
-const analyzeByObjectKey = async (objectKey, config) => {
+const analyzeByObjectKey = async (objectKey, config, selectedImages = []) => {
   const response = await fetch(`${backendBaseUrl.value}/analyze_path`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ video_path: objectKey, config }),
+    body: JSON.stringify({ video_path: objectKey, config, selected_images: selectedImages }),
   })
   await readSseResponse(response)
 }
 
-const directUploadToMinioAndAnalyze = async (file, config) => {
+const directUploadToMinioAndAnalyze = async (file, config, selectedImages = []) => {
   progressPercent.value = 0
   progressMsg.value = '请求上传地址...'
 
@@ -1708,7 +1769,7 @@ const directUploadToMinioAndAnalyze = async (file, config) => {
 
   progressMsg.value = '上传完成，开始分析...'
   progressPercent.value = 5
-  await analyzeByObjectKey(objectKey, config)
+  await analyzeByObjectKey(objectKey, config, selectedImages)
 }
 
 const getTranscriptContext = () => {
@@ -2058,23 +2119,72 @@ const handleSubmit = async () => {
     return
   }
 
+  showTitleModal.value = true
+}
+
+const startAnalysis = async () => {
+  showTitleModal.value = false
+  const hasUploadFile = !!videoFile.value
+  const hasImportedPath = !!videoPath.value
+
   loading.value = true
   progressPercent.value = 0
   progressMsg.value = hasUploadFile ? 'Preparing upload...' : 'Preparing analysis...'
   report.value = ''
   analysisData.value = null
   
-  const config = buildConfig()
+  // Force refresh config from localStorage
+  const getCfg = (key, storeVal) => {
+      const local = localStorage.getItem(key)
+      return (local !== null && local !== undefined) ? local : storeVal
+  }
+
+  const taskConfig = {
+      openai_api_key: getCfg('openai_api_key', configStore.openai_api_key),
+      openai_base_url: getCfg('openai_base_url', configStore.openai_base_url),
+      llm_model: getCfg('llm_model', configStore.llm_model),
+      ocr_engine: getCfg('ocr_engine', configStore.ocr_engine),
+      vl_model: getCfg('vl_model', configStore.vl_model),
+      vl_base_url: getCfg('vl_base_url', configStore.vl_base_url),
+      vl_api_key: getCfg('vl_api_key', configStore.vl_api_key),
+      model_size: getCfg('model_size', configStore.model_size) || null,
+      device: getCfg('device', configStore.device) || null,
+      compute_type: getCfg('compute_type', configStore.compute_type) || null,
+      capture_offset: (() => {
+          const val = getCfg('capture_offset', configStore.capture_offset)
+          const num = parseFloat(val)
+          return isNaN(num) ? null : num
+      })(),
+      title_preference: titlePreference.value
+  }
+
+  // DEBUG: Check config before sending
+  console.log('>>> Submitting analysis config:', JSON.stringify(taskConfig, null, 2))
+  if (!taskConfig.openai_api_key) {
+      Message.warning('未检测到前端 API Key，将使用后端环境变量配置')
+  } else {
+      Message.success('前端 API Key 检测成功，准备分析')
+      console.log('>>> API Key detected:', taskConfig.openai_api_key.substring(0, 8) + '...')
+  }
 
   try {
+    // Collect selected images
+    const selectedImages = coursewareData.value
+      .filter((item, idx) => isCoursewareSelected(getCoursewareKey(item, idx)))
+      .map(item => item.url)
+
     if (hasUploadFile) {
       const file = videoFile.value
-      await directUploadToMinioAndAnalyze(file, config)
+      await directUploadToMinioAndAnalyze(file, taskConfig, selectedImages)
     } else {
       const response = await fetch(`${backendBaseUrl.value}/analyze_path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ video_path: videoPath.value, config }),
+        body: JSON.stringify({ 
+            video_path: videoPath.value, 
+            config: taskConfig,
+            selected_images: selectedImages
+        }),
       })
       await readSseResponse(response)
     }
@@ -3490,7 +3600,10 @@ const handleSubmit = async () => {
 .detail-text-area::-webkit-scrollbar,
 .keyframes-tab-content::-webkit-scrollbar,
 .courseware-tab-content::-webkit-scrollbar,
-.chat-messages::-webkit-scrollbar {
+.chat-messages::-webkit-scrollbar,
+.terms-tab-content::-webkit-scrollbar,
+.detail-content-scrollable::-webkit-scrollbar,
+.notes-content-scrollable::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
@@ -3499,7 +3612,10 @@ const handleSubmit = async () => {
 .detail-text-area::-webkit-scrollbar-thumb,
 .keyframes-tab-content::-webkit-scrollbar-thumb,
 .courseware-tab-content::-webkit-scrollbar-thumb,
-.chat-messages::-webkit-scrollbar-thumb {
+.chat-messages::-webkit-scrollbar-thumb,
+.terms-tab-content::-webkit-scrollbar-thumb,
+.detail-content-scrollable::-webkit-scrollbar-thumb,
+.notes-content-scrollable::-webkit-scrollbar-thumb {
   background: var(--text-muted);
   border-radius: 3px;
   opacity: 0.5;
@@ -3509,7 +3625,10 @@ const handleSubmit = async () => {
 .detail-text-area::-webkit-scrollbar-track,
 .keyframes-tab-content::-webkit-scrollbar-track,
 .courseware-tab-content::-webkit-scrollbar-track,
-.chat-messages::-webkit-scrollbar-track {
+.chat-messages::-webkit-scrollbar-track,
+.terms-tab-content::-webkit-scrollbar-track,
+.detail-content-scrollable::-webkit-scrollbar-track,
+.notes-content-scrollable::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -3517,7 +3636,10 @@ const handleSubmit = async () => {
 .detail-text-area::-webkit-scrollbar-button,
 .keyframes-tab-content::-webkit-scrollbar-button,
 .courseware-tab-content::-webkit-scrollbar-button,
-.chat-messages::-webkit-scrollbar-button {
+.chat-messages::-webkit-scrollbar-button,
+.terms-tab-content::-webkit-scrollbar-button,
+.detail-content-scrollable::-webkit-scrollbar-button,
+.notes-content-scrollable::-webkit-scrollbar-button {
   display: none;
 }
 .no-subtitles-state {
@@ -3534,4 +3656,66 @@ const handleSubmit = async () => {
 .no-subtitles-state p {
     font-size: 16px;
   }
+
+/* Terms Tab */
+.terms-tab-content {
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px;
+  background-color: var(--surface-1);
+}
+
+.terms-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 40px;
+}
+
+.term-item {
+  background: var(--surface-0);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--card-border);
+  transition: all 0.2s;
+}
+
+.term-item:hover {
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-2);
+}
+
+.term-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.term-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: var(--primary-color);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.term-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.term-desc {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  padding-left: 36px;
+}
 </style>

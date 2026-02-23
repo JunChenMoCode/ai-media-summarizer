@@ -106,6 +106,14 @@ def mysql_init() -> None:
     engine = mysql_engine()
     ddl = [
         """
+        CREATE TABLE IF NOT EXISTS app_config (
+          id INT NOT NULL PRIMARY KEY,
+          config_json JSON NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        """
         CREATE TABLE IF NOT EXISTS media_folders (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
           parent_id BIGINT UNSIGNED NULL,
@@ -152,6 +160,21 @@ def mysql_init() -> None:
           CONSTRAINT fk_media_artifacts_asset_id FOREIGN KEY (asset_id) REFERENCES media_assets(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
+        """
+        CREATE TABLE IF NOT EXISTS task_queue (
+          id VARCHAR(36) NOT NULL PRIMARY KEY,
+          url TEXT NOT NULL,
+          task_type VARCHAR(32) NOT NULL DEFAULT 'video',
+          status VARCHAR(32) NOT NULL DEFAULT 'pending',
+          progress INT NOT NULL DEFAULT 0,
+          created_at DOUBLE NOT NULL,
+          result_json JSON NULL,
+          error_msg TEXT NULL,
+          config_json JSON NULL,
+          logs_json JSON NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
     ]
 
     with engine.begin() as conn:
@@ -179,6 +202,49 @@ def _sanitize_config(config: dict) -> dict:
         if k in clean:
             clean[k] = ""
     return clean
+
+
+def save_app_config(config: dict) -> None:
+    if not mysql_enabled():
+        raise RuntimeError("MySQL 未启用")
+    mysql_init()
+    from sqlalchemy import text
+    engine = mysql_engine()
+    cfg_json = _json_or_none(config)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO app_config (id, config_json, created_at, updated_at)
+                VALUES (1, CAST(:config_json AS JSON), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON DUPLICATE KEY UPDATE
+                  config_json = VALUES(config_json),
+                  updated_at = CURRENT_TIMESTAMP
+                """
+            ),
+            {"config_json": cfg_json},
+        )
+
+
+def load_app_config() -> dict:
+    if not mysql_enabled():
+        raise RuntimeError("MySQL 未启用")
+    mysql_init()
+    from sqlalchemy import text
+    engine = mysql_engine()
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT config_json FROM app_config WHERE id=1")).first()
+    if not row:
+        return {}
+    cfg = row[0]
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return cfg
 
 
 def save_artifact_by_md5(
@@ -209,7 +275,6 @@ def save_artifact_by_md5(
     from sqlalchemy import text
 
     engine = mysql_engine()
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     meta_json = _json_or_none(meta)
     content_json_str = _json_or_none(content_json)
     artifact_meta_json = _json_or_none(artifact_meta)
@@ -653,6 +718,51 @@ def move_asset_to_folder(video_md5: str, folder_id: int | None) -> bool:
         return res.rowcount > 0
 
 
+def get_all_analysis_tags() -> list[dict]:
+    if not mysql_enabled():
+        return []
+    mysql_init()
+
+    from sqlalchemy import text
+    engine = mysql_engine()
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT content_json
+                FROM media_artifacts
+                WHERE artifact_type = 'ai_analysis'
+                """
+            )
+        ).mappings().all()
+
+    tag_counts = {}
+    for r in rows:
+        cj = r["content_json"]
+        if isinstance(cj, str):
+            try:
+                cj = json.loads(cj)
+            except Exception:
+                continue
+
+        if isinstance(cj, dict):
+            tags = cj.get("tags")
+            if isinstance(tags, list):
+                for t in tags:
+                    if isinstance(t, str):
+                        t_str = t.strip()
+                        if t_str:
+                            tag_counts[t_str] = tag_counts.get(t_str, 0) + 1
+    
+    result = [
+        {"name": k, "value": v}
+        for k, v in tag_counts.items()
+    ]
+    result.sort(key=lambda x: x["value"], reverse=True)
+    return result
+
+
 # Folder methods
 
 def create_folder(name: str, parent_id: int | None = None) -> int:
@@ -737,6 +847,7 @@ def delete_folder(folder_id: int) -> bool:
     
     from sqlalchemy import text
     engine = mysql_engine()
+    
     with engine.begin() as conn:
         res = conn.execute(
             text("DELETE FROM media_folders WHERE id = :id"),
@@ -745,11 +856,49 @@ def delete_folder(folder_id: int) -> bool:
         return res.rowcount > 0
 
 
-def get_all_analysis_tags() -> list[dict]:
+def db_add_task(
+    task_id: str,
+    url: str,
+    task_type: str = "video",
+    created_at: float = 0.0,
+    config: dict | None = None,
+) -> None:
+    if not mysql_enabled():
+        return
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    config_json = _json_or_none(config)
+    
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO task_queue (
+                  id, url, task_type, status, progress, created_at, config_json, updated_at
+                )
+                VALUES (
+                  :id, :url, :task_type, 'pending', 0, :created_at, CAST(:config_json AS JSON), CURRENT_TIMESTAMP
+                )
+                """
+            ),
+            {
+                "id": task_id,
+                "url": url,
+                "task_type": task_type,
+                "created_at": created_at,
+                "config_json": config_json,
+            },
+        )
+
+
+def db_get_all_tasks(limit: int = 100, offset: int = 0) -> list[dict]:
     if not mysql_enabled():
         return []
-    
     mysql_init()
+    
     from sqlalchemy import text
     engine = mysql_engine()
     
@@ -757,32 +906,187 @@ def get_all_analysis_tags() -> list[dict]:
         rows = conn.execute(
             text(
                 """
-                SELECT content_json
-                FROM media_artifacts
-                WHERE artifact_type = 'ai_analysis'
+                SELECT id, url, task_type, status, progress, created_at, result_json, error_msg, config_json, logs_json, updated_at
+                FROM task_queue
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
                 """
-            )
+            ),
+            {"limit": limit, "offset": offset}
         ).mappings().all()
         
-    tag_counts = {}
+    out = []
     for r in rows:
-        cj = r.get("content_json")
-        if isinstance(cj, str):
+        cfg = r["config_json"]
+        if isinstance(cfg, str):
             try:
-                cj = json.loads(cj)
-            except Exception:
-                continue
+                cfg = json.loads(cfg)
+            except:
+                pass
+                
+        res = r["result_json"]
+        if isinstance(res, str):
+            try:
+                res = json.loads(res)
+            except:
+                pass
+                
+        logs = r["logs_json"]
+        if isinstance(logs, str):
+            try:
+                logs = json.loads(logs)
+            except:
+                logs = []
+        if not isinstance(logs, list):
+            logs = []
+            
+        out.append({
+            "id": r["id"],
+            "url": r["url"],
+            "type": r["task_type"],
+            "status": r["status"],
+            "progress": r["progress"],
+            "created_at": r["created_at"],
+            "result": res,
+            "error": r["error_msg"],
+            "config": cfg,
+            "logs": logs,
+        })
+    return out
+
+
+def db_count_tasks() -> int:
+    if not mysql_enabled():
+        return 0
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    with engine.begin() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM task_queue")
+        ).scalar()
         
-        if isinstance(cj, dict):
-            tags = cj.get("tags", [])
-            if isinstance(tags, list):
-                for tag in tags:
-                    t = str(tag).strip()
-                    if t:
-                        tag_counts[t] = tag_counts.get(t, 0) + 1
-                        
-    # Format for echarts-wordcloud: [{"name": "tag", "value": count}]
-    result = [{"name": k, "value": v} for k, v in tag_counts.items()]
-    # Sort by value desc
-    result.sort(key=lambda x: x["value"], reverse=True)
-    return result
+    return count or 0
+
+
+def db_get_task(task_id: str) -> dict | None:
+    if not mysql_enabled():
+        return None
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT id, url, task_type, status, progress, created_at, result_json, error_msg, config_json, logs_json, updated_at
+                FROM task_queue
+                WHERE id = :id
+                """
+            ),
+            {"id": task_id}
+        ).mappings().first()
+        
+    if not row:
+        return None
+        
+    cfg = row["config_json"]
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except:
+            pass
+            
+    res = row["result_json"]
+    if isinstance(res, str):
+        try:
+            res = json.loads(res)
+        except:
+            pass
+            
+    logs = row["logs_json"]
+    if isinstance(logs, str):
+        try:
+            logs = json.loads(logs)
+        except:
+            logs = []
+    if not isinstance(logs, list):
+        logs = []
+        
+    return {
+        "id": row["id"],
+        "url": row["url"],
+        "type": row["task_type"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "created_at": row["created_at"],
+        "result": res,
+        "error": row["error_msg"],
+        "config": cfg,
+        "logs": logs,
+    }
+
+
+def db_update_task(
+    task_id: str,
+    status: str | None = None,
+    progress: int | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+    logs: list[str] | None = None,
+) -> bool:
+    if not mysql_enabled():
+        return False
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    updates = []
+    params = {"id": task_id}
+    
+    if status is not None:
+        updates.append("status = :status")
+        params["status"] = status
+    if progress is not None:
+        updates.append("progress = :progress")
+        params["progress"] = progress
+    if result is not None:
+        updates.append("result_json = CAST(:result_json AS JSON)")
+        params["result_json"] = _json_or_none(result)
+    if error is not None:
+        updates.append("error_msg = :error")
+        params["error"] = error
+    if logs is not None:
+        updates.append("logs_json = CAST(:logs_json AS JSON)")
+        params["logs_json"] = _json_or_none(logs)
+        
+    if not updates:
+        return False
+        
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    sql = f"UPDATE task_queue SET {', '.join(updates)} WHERE id = :id"
+    
+    with engine.begin() as conn:
+        res = conn.execute(text(sql), params)
+        return res.rowcount > 0
+
+
+def db_delete_task(task_id: str) -> bool:
+    if not mysql_enabled():
+        return False
+    mysql_init()
+    
+    from sqlalchemy import text
+    engine = mysql_engine()
+    
+    with engine.begin() as conn:
+        res = conn.execute(
+            text("DELETE FROM task_queue WHERE id = :id"),
+            {"id": task_id}
+        )
+        return res.rowcount > 0

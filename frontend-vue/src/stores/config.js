@@ -10,13 +10,27 @@ export const useConfigStore = defineStore('config', {
     vl_model: localStorage.getItem('vl_model') || 'Pro/Qwen/Qwen2-VL-7B-Instruct',
     vl_base_url: localStorage.getItem('vl_base_url') || 'https://api.siliconflow.cn/v1',
     vl_api_key: localStorage.getItem('vl_api_key') || '',
-    model_size: localStorage.getItem('model_size') || 'medium',
-    device: localStorage.getItem('device') || 'cuda',
-    compute_type: localStorage.getItem('compute_type') || 'float16',
-    capture_offset: parseFloat(localStorage.getItem('capture_offset')) || 5.0,
+    model_size: localStorage.getItem('model_size') || null,
+    device: localStorage.getItem('device') || null,
+    compute_type: localStorage.getItem('compute_type') || null,
+    capture_offset: localStorage.getItem('capture_offset') ? parseFloat(localStorage.getItem('capture_offset')) : null,
     theme: localStorage.getItem('theme') || 'light',
   }),
   actions: {
+    async fetchConfig() {
+      try {
+        const base = this.backend_base_url.replace(/\/+$/, '')
+        const res = await fetch(`${base}/tasks/config`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data && typeof data === 'object') {
+            this.updateConfig(data)
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch remote config:', e)
+      }
+    },
     updateConfig(newConfig) {
       Object.assign(this, newConfig)
       // 持久化到 localStorage

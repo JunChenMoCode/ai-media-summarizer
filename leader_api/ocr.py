@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from openai import OpenAI
 
 from .models import ConfigModel, CoursewareOcrRequest
+from .mysql_store import load_app_config
 
 router = APIRouter()
 
@@ -229,9 +230,26 @@ async def ocr_courseware(request: CoursewareOcrRequest):
     if not items:
         return {"results": []}
 
+    config_data = load_app_config()
+    if not config_data:
+        raise RuntimeError("数据库配置为空，请先在前端设置并保存")
+    config = ConfigModel(
+        openai_api_key=config_data.get("openai_api_key", ""),
+        openai_base_url=config_data.get("openai_base_url", ""),
+        llm_model=config_data.get("llm_model", ""),
+        ocr_engine=str(config_data.get("ocr_engine", "vl")),
+        vl_model=str(config_data.get("vl_model", "Pro/Qwen/Qwen2-VL-7B-Instruct")),
+        vl_base_url=str(config_data.get("vl_base_url", "https://api.siliconflow.cn/v1")),
+        vl_api_key=str(config_data.get("vl_api_key", "")),
+        model_size=config_data.get("model_size", "medium"),
+        device=config_data.get("device", "cuda"),
+        compute_type=config_data.get("compute_type", "float16"),
+        capture_offset=float(config_data.get("capture_offset", 5.0)),
+    )
+
     def run():
         results = []
-        engine = (getattr(request.config, "ocr_engine", "") or "vl").strip().lower()
+        engine = (getattr(config, "ocr_engine", "") or "vl").strip().lower()
         for item in items:
             try:
                 parsed = urlparse(item.url)
@@ -248,7 +266,7 @@ async def ocr_courseware(request: CoursewareOcrRequest):
                     text = tesseract_ocr_bytes(image_bytes, mime_type=mime_type)
                 else:
                     text = analyze_image_with_vl_model_bytes(
-                        request.config,
+                        config,
                         image_bytes,
                         mime_type=mime_type,
                         prompt=OCR_PROMPT,
@@ -281,7 +299,7 @@ async def ocr_courseware(request: CoursewareOcrRequest):
                     video_md5,
                     artifact_type="courseware_ocr",
                     content_json={"items": [i.model_dump() for i in items], "results": results},
-                    artifact_meta={"config": _sanitize_config(request.config.model_dump())},
+                    artifact_meta={"config": _sanitize_config(config.model_dump())},
                 )
         except Exception:
             pass

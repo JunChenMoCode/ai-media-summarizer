@@ -108,7 +108,7 @@
             </a-button>
 
             <!-- Format Label -->
-            <div class="format-label">
+            <div class="format-label" v-if="getFormatLabel(item)">
               {{ getFormatLabel(item) }}
             </div>
 
@@ -123,7 +123,7 @@
               <img 
                 :src="getCoverUrl(item)" 
                 alt="Cover" 
-                class="card-cover-img"
+                :class="['card-cover-img', { 'default-cover-img': isDefaultCover(getCoverUrl(item)) }]"
               />
             </div>
             <div v-else class="card-icon-placeholder">
@@ -135,8 +135,8 @@
 
             <!-- Info Section -->
             <div class="card-info-section">
-              <div class="info-title" :title="item.content_json?.title || item.display_name || item.md5">
-                {{ item.content_json?.title || item.display_name || item.md5 }}
+              <div class="info-title" :title="getItemTitle(item)">
+                {{ getItemTitle(item) }}
               </div>
               <div class="info-desc" :title="item.content_json?.summary">
                 {{ item.content_json?.summary || '暂无摘要' }}
@@ -189,10 +189,27 @@ import {
   IconRefresh, IconFile, IconPlayCircle, IconFolder, IconDown
 } from '@arco-design/web-vue/es/icon'
 import { useConfigStore } from '../stores/config'
+import coverMD from '../assert/author_bg_card/MD.jpg'
+import coverMP4 from '../assert/author_bg_card/MP4.jpg'
+import coverPDF from '../assert/author_bg_card/PDF.jpg'
+import coverTXT from '../assert/author_bg_card/TXT.jpg'
 
 const router = useRouter()
 const configStore = useConfigStore()
 const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
+
+const decodeTitle = (s) => {
+  const v = String(s || '').trim()
+  if (!v) return v
+  if (!/%[0-9A-Fa-f]{2}/.test(v)) return v
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
+const getItemTitle = (item) => decodeTitle(item?.content_json?.title || item?.display_name || item?.md5)
 
 const folderTreeData = ref([])
 const flatFolders = ref([])
@@ -341,10 +358,16 @@ const deleteFolder = async (node) => {
 }
 
 const openItem = (item) => {
-  const md5 = item.md5
+  const md5 = String(item?.md5 || '').trim().toLowerCase()
   if (!md5) return
+
+  if (!item.is_read) {
+    item.is_read = true
+    fetch(`${backendBaseUrl.value}/analysis/${encodeURIComponent(md5)}/read`, { method: 'POST' }).catch(() => {})
+  }
   
-  if (item.asset_type === 'document') {
+  const at = String(item?.asset_type || '').trim().toLowerCase()
+  if (at === 'document' || at === 'file') {
     router.push({ name: 'AiFileSummary', query: { md5 } })
   } else {
     router.push({ name: 'AiVideoSummary', query: { md5 } })
@@ -375,8 +398,55 @@ const handleDelete = async (item) => {
 }
 
 const getFormatLabel = (item) => {
-  const ext = (item.source_ref || '').split('.').pop() || ''
-  return ext.toUpperCase() || 'FILE'
+  const dn = String(item?.display_name || '').trim()
+  if (dn) {
+    const clean = dn.split('?', 1)[0].split('#', 1)[0]
+    const idx = clean.lastIndexOf('.')
+    if (idx > -1 && idx < clean.length - 1) {
+      const ext = clean.slice(idx + 1).toUpperCase()
+      if (['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX', 'TXT', 'MD', 'MP4', 'MP3', 'MOV', 'AVI', 'MKV', 'WAV', 'M4A'].includes(ext)) {
+        return ext
+      }
+    }
+  }
+
+  const mt = String(item?.mime_type || '').toLowerCase()
+  if (mt) {
+    if (mt.includes('pdf')) return 'PDF'
+    if (mt.includes('word') || mt.includes('document')) return 'DOCX'
+    if (mt.includes('powerpoint') || mt.includes('presentation')) return 'PPTX'
+    if (mt.includes('markdown')) return 'MD'
+    if (mt.includes('text') || mt.includes('plain')) return 'TXT'
+    if (mt.includes('octet-stream')) return 'FILE'
+    const parts = mt.split('/')
+    if (parts.length > 1) return parts[1].toUpperCase()
+    return mt.toUpperCase()
+  }
+
+  const sr = String(item?.source_ref || '').trim()
+  if (sr) {
+    const clean = sr.split('?', 1)[0].split('#', 1)[0]
+    const idx = clean.lastIndexOf('.')
+    if (idx > -1 && idx < clean.length - 1) {
+      return clean.slice(idx + 1).toUpperCase()
+    }
+  }
+
+  // 3. 其次检查 asset_type
+  const at = (item.asset_type || '').toUpperCase()
+  if (at === 'VIDEO' || at === 'AUDIO' || at === 'UNKNOWN') return 'VIDEO'
+  if (at === 'DOCUMENT' || at === 'FILE') return 'DOC'
+
+  // 4. 内容特征检查
+  // 如果有 segments，通常是音视频
+  if (item.content_json?.segments?.length > 0) return 'VIDEO'
+
+  // 5. 来源 URL 特征
+  const sr2 = String(item.source_ref || '').toLowerCase()
+  if (sr2.includes('bilibili')) return 'BILI'
+  if (sr2.includes('youtube') || sr2.includes('youtu.be')) return 'YT'
+
+  return at || 'FILE'
 }
 
 const getCoverUrl = (item) => {
@@ -385,7 +455,16 @@ const getCoverUrl = (item) => {
     const seg = cj.segments[0]
     if (seg.image_url) return seg.image_url
   }
-  return null
+  const fmt = getFormatLabel(item)
+  if (fmt === 'MD') return coverMD
+  if (fmt === 'PDF') return coverPDF
+  if (fmt === 'TXT') return coverTXT
+  if (fmt === 'MP4') return coverMP4
+  return ''
+}
+
+const isDefaultCover = (url) => {
+  return url === coverMD || url === coverPDF || url === coverTXT || url === coverMP4
 }
 
 const onDragOver = (event) => {
@@ -545,6 +624,7 @@ onMounted(() => {
 .folder-tree-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px;
 }
 
@@ -617,7 +697,9 @@ onMounted(() => {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 24px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 20px;
+  padding-right: 12px; /* Add space for scrollbar/card edge */
 }
 
 /* Neo Brutalism data card - Matches Video.vue */
@@ -720,6 +802,10 @@ onMounted(() => {
   transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
+.default-cover-img {
+  object-position: 50% 35%;
+}
+
 .card-sm:hover .card-cover-img {
   transform: scale(1.1);
 }
@@ -795,5 +881,48 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Custom Scrollbar */
+.folder-tree-container::-webkit-scrollbar,
+.assets-grid::-webkit-scrollbar {
+  width: 4px;
+  height: 0;
+}
+
+.folder-tree-container::-webkit-scrollbar:horizontal,
+.assets-grid::-webkit-scrollbar:horizontal {
+  height: 0;
+  display: none;
+}
+
+.folder-tree-container::-webkit-scrollbar-thumb,
+.assets-grid::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 2px;
+  opacity: 0.5;
+}
+
+.folder-tree-container::-webkit-scrollbar-track,
+.assets-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.folder-tree-container::-webkit-scrollbar-button,
+.assets-grid::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.folder-tree-container::-webkit-scrollbar-corner,
+.assets-grid::-webkit-scrollbar-corner {
+  display: none;
+}
+
+.folder-tree-container,
+.assets-grid {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
 }
 </style>

@@ -16,12 +16,15 @@ from .file_routes import router as file_router
 from .tasks_routes import router as tasks_router
 from .folder_routes import router as folder_router
 from .task_worker import worker_loop
+from .mysql_store import mysql_init, mysql_enabled
 import asyncio
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Run worker
+    if mysql_enabled():
+        mysql_init()
     task = asyncio.create_task(worker_loop())
     yield
     # Shutdown: Cancel worker
@@ -52,11 +55,6 @@ def create_app() -> FastAPI:
         expose_headers=["*"],
     )
 
-    # 挂载静态文件目录，用于访问生成的图片等
-    static_dir = os.path.join(os.getcwd(), "fast_output")
-    os.makedirs(static_dir, exist_ok=True)
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
     # 路由按模块拆分，每个模块只关注自己的职责
     app.include_router(minio_router)
     app.include_router(video_router)
@@ -69,9 +67,13 @@ def create_app() -> FastAPI:
     app.include_router(llm_router)
     app.include_router(capture_router)
 
+    # Mount static files
+    storage_dir = os.path.join(os.getcwd(), "storage")
+    os.makedirs(storage_dir, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=storage_dir), name="static")
+
     return app
 
 
 # uvicorn 默认用 `main:app`，因此这里提供一个 module-level 的 app 实例
 app = create_app()
-

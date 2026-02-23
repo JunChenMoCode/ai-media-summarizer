@@ -307,6 +307,20 @@ watchEffect(() => {
   padding: 0; /* 内容区填满剩余空间 */
 }
 
+/* Custom Scrollbar for Content Container */
+.content-container::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.content-container::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
+  opacity: 0.5;
+}
+.content-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;

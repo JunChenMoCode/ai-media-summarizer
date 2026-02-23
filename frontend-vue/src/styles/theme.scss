@@ -196,3 +196,33 @@ body {
   margin: 16px 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
+
+/* Global Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-sub);
+  opacity: 0.2;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-main);
+  opacity: 0.5;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-sub) transparent;
+}

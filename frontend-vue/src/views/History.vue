@@ -24,7 +24,7 @@
       >
         <div class="card-content-wrapper">
           <!-- Format Label -->
-          <div class="format-label">
+          <div class="format-label" v-if="getFormatLabel(item)">
             {{ getFormatLabel(item) }}
           </div>
 
@@ -36,7 +36,7 @@
             <img 
               :src="getCoverUrl(item)" 
               alt="Cover" 
-              class="card-cover-img"
+              :class="['card-cover-img', { 'default-cover-img': isDefaultCover(getCoverUrl(item)) }]"
             />
           </div>
           <div v-else class="card-icon-placeholder">
@@ -48,8 +48,8 @@
 
           <!-- Info Section -->
           <div class="card-info-section">
-            <div class="info-title" :title="item.title || item.display_name || item.md5">
-              {{ item.title || item.display_name || item.md5 }}
+            <div class="info-title" :title="getItemTitle(item)">
+              {{ getItemTitle(item) }}
             </div>
             <div class="info-desc" :title="item.summary">
               {{ item.summary || '暂无摘要' }}
@@ -73,14 +73,72 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useHistoryStore } from '../stores/history'
+import { useConfigStore } from '../stores/config'
 import { Message } from '@arco-design/web-vue'
+import coverMD from '../assert/author_bg_card/MD.jpg'
+import coverMP4 from '../assert/author_bg_card/MP4.jpg'
+import coverPDF from '../assert/author_bg_card/PDF.jpg'
+import coverTXT from '../assert/author_bg_card/TXT.jpg'
 
 const router = useRouter()
 const historyStore = useHistoryStore()
+const configStore = useConfigStore()
 const history = computed(() => historyStore.history)
+const backendBaseUrl = computed(() => (configStore.backend_base_url || '').replace(/\/+$/, ''))
+
+const norm = (s) => String(s || '').trim().toLowerCase()
+const decodeTitle = (s) => {
+  const v = String(s || '').trim()
+  if (!v) return v
+  if (!/%[0-9A-Fa-f]{2}/.test(v)) return v
+  try {
+    return decodeURIComponent(v)
+  } catch {
+    return v
+  }
+}
+
+const getItemTitle = (item) => decodeTitle(item?.title || item?.display_name || item?.md5)
+
+onMounted(async () => {
+  const base = backendBaseUrl.value
+  if (!base) return
+  // Always try to hydrate/refresh to get latest metadata (cover, title, type)
+  try {
+    const res = await fetch(`${base}/analysis/list?limit=200`)
+    if (!res.ok) return
+    const data = await res.json()
+    const items = Array.isArray(data.items) ? data.items : []
+    const map = new Map(items.map(it => [norm(it?.md5), it]))
+    historyStore.history.forEach(h => {
+      const it = map.get(norm(h?.md5))
+      if (!it) return
+      // Update fields if available in remote
+      if (it.display_name) h.display_name = it.display_name
+      if (it.mime_type) h.mime_type = it.mime_type
+      if (it.asset_type) h.asset_type = it.asset_type
+      if (it.source_ref) h.source_ref = it.source_ref
+      
+      const nextTitle = it.content_json?.title || it.display_name || h.display_name
+      if (nextTitle) {
+        const cur = String(h.title || '').trim()
+        const md5 = String(h.md5 || '').trim()
+        if (!cur || cur === md5) h.title = nextTitle
+      }
+      if (it.content_json?.summary) h.summary = it.content_json.summary
+      // Also update cover related info if needed
+      if (it.content_json) {
+        h.content_json = it.content_json
+        if (it.content_json.tags) h.tags = it.content_json.tags
+      }
+    })
+  } catch (e) {
+    return
+  }
+})
 
 const clearHistory = () => {
   historyStore.clearHistory()
@@ -112,15 +170,71 @@ const getCoverUrl = (item) => {
     const seg = item.content_json.segments[0]
     if (seg.image_url) return seg.image_url
   }
+  const fmt = getFormatLabel(item)
+  if (fmt === 'MD') return coverMD
+  if (fmt === 'PDF') return coverPDF
+  if (fmt === 'TXT') return coverTXT
+  if (fmt === 'MP4') return coverMP4
   return ''
 }
 
+const isDefaultCover = (url) => {
+  return url === coverMD || url === coverPDF || url === coverTXT || url === coverMP4
+}
+
 const getFormatLabel = (item) => {
-  // Simple heuristic
+  // 1. 优先使用 display_name 或 title 的后缀名
+  const name = String(item.display_name || item.title || '').trim()
+  if (name) {
+    const parts = name.split('.')
+    if (parts.length > 1) {
+      const ext = parts.pop().toUpperCase()
+      // 常见文档/音视频格式直接返回
+      if (['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX', 'TXT', 'MD', 'MP4', 'MP3', 'MOV', 'AVI', 'MKV', 'WAV', 'M4A'].includes(ext)) {
+        return ext
+      }
+    }
+  }
+
+  // 2. 其次检查 mime_type
+  if (item.mime_type) {
+    const mt = item.mime_type.toLowerCase()
+    if (mt.includes('pdf')) return 'PDF'
+    if (mt.includes('word') || mt.includes('document')) return 'DOCX'
+    if (mt.includes('powerpoint') || mt.includes('presentation')) return 'PPTX'
+    if (mt.includes('markdown')) return 'MD'
+    if (mt.includes('text') || mt.includes('plain')) return 'TXT'
+    if (mt.includes('octet-stream')) {
+        // 如果是 octet-stream，尝试再次从 display_name 提取，或者返回 'FILE'
+        if (item.display_name) {
+             const ext = item.display_name.split('.').pop()
+             if (ext && ext !== item.display_name) return ext.toUpperCase()
+        }
+        return 'FILE'
+    }
+    
+    const parts = item.mime_type.split('/')
+    if (parts.length > 1) {
+       return parts[1].toUpperCase()
+    }
+    return item.mime_type.toUpperCase()
+  }
+
+  // 3. 其次检查 asset_type
   const at = (item.asset_type || '').toUpperCase()
+  if (at === 'VIDEO' || at === 'AUDIO' || at === 'UNKNOWN') return 'VIDEO'
   if (at === 'DOCUMENT' || at === 'FILE') return 'DOC'
-  if (at === 'VIDEO' || at === 'UNKNOWN') return 'VIDEO'
-  return at
+
+  // 4. 内容特征检查
+  // 如果有 segments，通常是音视频
+  if (item.content_json?.segments?.length > 0) return 'VIDEO'
+
+  // 5. 来源 URL 特征
+  const sr = String(item.source_ref || '').toLowerCase()
+  if (sr.includes('bilibili')) return 'BILI'
+  if (sr.includes('youtube') || sr.includes('youtu.be')) return 'YT'
+
+  return at || 'FILE'
 }
 
 const formatTime = (ts) => {
@@ -241,6 +355,10 @@ const formatTime = (ts) => {
   height: 100%;
   object-fit: cover;
   transition: transform 0.5s ease;
+}
+
+.default-cover-img {
+  object-position: 50% 35%;
 }
 
 .card-sm:hover .card-cover-img {

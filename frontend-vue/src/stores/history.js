@@ -32,10 +32,11 @@ export const useHistoryStore = defineStore('history', () => {
     // Add to beginning
     const historyItem = {
       md5: item.md5,
-      title: item.content_json?.title || item.display_name || item.md5,
-      summary: item.content_json?.summary,
+      title: item.title || item.content_json?.title || item.display_name || item.md5,
+      summary: item.summary || item.content_json?.summary,
       cover_url: item.content_json?.cover_url || item.cover_url, // Handle different structures
       asset_type: item.asset_type,
+      mime_type: item.mime_type || item.content_json?.mime_type, // Persist mime_type
       tags: item.content_json?.tags || [],
       timestamp: Date.now(),
       // Store minimal needed data
