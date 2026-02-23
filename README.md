@@ -1,4 +1,4 @@
-# 🚀 Leader：高性能视频总结（Web 版）
+# 🚀 Summary Studio
 
 这是一个“音频直提 + ASR 加速 + LLM 分段 + 按需并行截图”的视频总结工具，提供 **FastAPI 后端** + **Vue3 前端** 的交互式 Web 界面，支持：
 
