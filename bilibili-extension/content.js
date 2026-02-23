@@ -1,5 +1,5 @@
 // Helper to create button
-function createAnalyzeButton(url) {
+function createAnalyzeButton(url, sourceTitle) {
   const btn = document.createElement('button');
   btn.className = 'ai-analysis-btn';
   btn.innerText = 'AI Analysis';
@@ -19,7 +19,11 @@ function createAnalyzeButton(url) {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ url: url })
+        body: JSON.stringify({
+          url: url,
+          type: 'video',
+          config: { title_preference: 'ai', source_title: sourceTitle || '' }
+        })
       });
       
       if (res.ok) {
@@ -42,6 +46,31 @@ function createAnalyzeButton(url) {
   });
   
   return btn;
+}
+
+function normalizeSourceTitle(title) {
+  const t = String(title || '').trim();
+  if (!t) return '';
+  return t
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*bilibili\s*$/i, '')
+    .replace(/\s*-\s*哔哩哔哩\s*$/i, '')
+    .trim();
+}
+
+function extractCardTitle(card, link) {
+  const candidates = [
+    link?.getAttribute?.('title'),
+    card?.querySelector?.('.bili-video-card__info--tit')?.innerText,
+    card?.querySelector?.('.title')?.innerText,
+    card?.querySelector?.('h3')?.innerText,
+    card?.querySelector?.('a[title]')?.getAttribute?.('title'),
+  ];
+  for (const c of candidates) {
+    const t = normalizeSourceTitle(c);
+    if (t) return t;
+  }
+  return '';
 }
 
 // Function to process video cards
@@ -80,7 +109,8 @@ function processCards() {
           cover.style.position = 'relative';
         }
         
-        const btn = createAnalyzeButton(href);
+        const sourceTitle = extractCardTitle(card, link) || normalizeSourceTitle(document.title);
+        const btn = createAnalyzeButton(href, sourceTitle);
         cover.appendChild(btn);
         card.dataset.aiProcessed = 'true';
       }

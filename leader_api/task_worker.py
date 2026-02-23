@@ -216,6 +216,8 @@ async def process_file_task(task):
                 continue
             task_cfg[k] = v
     title_preference = str(task_cfg.get("title_preference") or "").strip().lower()
+    if title_preference not in ("ai", "filename"):
+        title_preference = "ai"
     
     # Create temp file
     parsed = urlparse(url)
@@ -245,11 +247,27 @@ async def process_file_task(task):
         
         # Extract Text
         task.progress = 30
-        task.logs.append("Extracting text...")
+        try:
+            size_bytes = os.path.getsize(tmp_path)
+        except Exception:
+            size_bytes = 0
+        size_mb = float(size_bytes) / (1024.0 * 1024.0) if size_bytes else 0.0
+        extract_timeout_s = 30 if ext in (".txt", ".md") else 180
+        if ext == ".pdf" and size_mb >= 30:
+            extract_timeout_s = 300
+        task.logs.append(f"Extracting text... ({ext}, {size_mb:.1f}MB)")
         task.save()
-        text_content = await asyncio.to_thread(_extract_text, tmp_path, ext)
+        try:
+            text_content = await asyncio.wait_for(
+                asyncio.to_thread(_extract_text, tmp_path, ext),
+                timeout=extract_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            raise Exception(f"Extracting text timed out after {extract_timeout_s}s: {ext}")
         
         if not text_content.strip():
+            if ext == ".pdf":
+                raise Exception("PDF 未提取到文本（可能是扫描件/加密/无文本层），请换可复制文本的 PDF 或先转为 txt/docx")
             raise Exception("Failed to extract text or file is empty.")
             
         task.progress = 50
@@ -456,6 +474,9 @@ async def process_video_task(task):
 
     co = task_cfg.get("capture_offset", None)
     title_preference = str(task_cfg.get("title_preference") or "").strip().lower()
+    source_title = str(task_cfg.get("source_title") or "").strip()
+    if title_preference not in ("ai", "filename"):
+        title_preference = "ai"
     
     config = ConfigModel(
         openai_api_key=get_cfg("openai_api_key", ""),
@@ -471,7 +492,12 @@ async def process_video_task(task):
         capture_offset=float(co) if co is not None and str(co).strip() != "" else 0.5,
     )
     
-    print(f">>> [DEBUG] Final ConfigModel: {config.model_dump()}")
+    config_dict = config.model_dump()
+    if title_preference:
+        config_dict["title_preference"] = title_preference
+    if source_title:
+        config_dict["source_title"] = source_title
+    print(f">>> [DEBUG] Final ConfigModel: {config_dict}")
     
     task.logs.append("Initializing analysis...")
     
@@ -562,12 +588,7 @@ async def process_video_task(task):
                 task.progress = 90
             # Don't save on every callback to avoid DB spam
         
-        analyzer = FastVideoAnalyzer(
-            video_source,
-            output_dir,
-            config=config.model_dump(),
-            progress_callback=progress_cb,
-        )
+        analyzer = FastVideoAnalyzer(video_source, output_dir, config=config_dict, progress_callback=progress_cb)
         
         ai_analysis = await asyncio.to_thread(analyzer.run)
         
@@ -611,12 +632,20 @@ async def process_video_task(task):
         
         # Save to MySQL
         task.logs.append("Saving to database...")
-        original_filename = unquote(os.path.basename(parsed.path) or "video.mp4")
+        url_path = (parsed.path or "").replace("\\", "/")
+        url_basename = os.path.basename(url_path.rstrip("/"))
+        original_filename = unquote(url_basename or "video.mp4")
         def _sanitize_title(s: str) -> str:
             t = (s or "").strip()
             t = re.sub(r"\s+", " ", t)
             t = t.strip(" \t\r\n-—:：#")
             return t[:80]
+
+        def _looks_like_bv(s: str) -> bool:
+            t = _sanitize_title(s)
+            if not t:
+                return False
+            return re.match(r"^BV[0-9A-Za-z]{6,}$", t) is not None
 
         display_name = original_filename
         ai_title = ""
@@ -627,6 +656,14 @@ async def process_video_task(task):
         if not ai_title:
             m = re.search(r"##\s*标题\s*(.*?)(?=\n##|\Z)", report_content or "", re.DOTALL | re.IGNORECASE)
             ai_title = _sanitize_title(m.group(1)) if m else ""
+        source_title_sanitized = _sanitize_title(source_title) if source_title else ""
+        if (
+            title_preference == "ai"
+            and source_title_sanitized
+            and not _looks_like_bv(source_title_sanitized)
+            and (not ai_title or _looks_like_bv(ai_title) or ai_title.lower().startswith("http"))
+        ):
+            ai_title = source_title_sanitized
         if title_preference == "ai" and ai_title:
             display_name = ai_title
         try:
@@ -637,7 +674,7 @@ async def process_video_task(task):
             pass
 
         meta = {
-            "config": config.model_dump(),
+            "config": config_dict,
             "original_filename": original_filename,
             "ai_title": ai_title,
             "job_id": job_id

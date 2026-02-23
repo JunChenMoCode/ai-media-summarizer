@@ -334,6 +334,12 @@ class FastVideoAnalyzer:
         if image_context:
             self.log(">>> 已生成图片上下文，将合并到 Prompt 中...")
         
+        source_title = ""
+        try:
+            source_title = str(self.config.get("source_title") or "").strip()
+        except Exception:
+            source_title = ""
+        
         system_prompt = (
             "你是一个专业的教育内容创作者和视频分析专家。我将提供带有时间戳的视频字幕。"
             "请将其转化为一份结构精美、易于学习的“深度学习笔记”。"
@@ -345,6 +351,7 @@ class FastVideoAnalyzer:
             "3. 知识小结表：提取视频中的核心知识点，以列表形式返回，包含知识点名称、核心内容、学习/应用重点、难度系数（用星星表示，如 ⭐⭐）。\n"
             "4. 关键标签：提取视频的3个核心关键词或分类标签。\n"
             "5. 专业术语表：提取视频中的专业术语、难懂词汇或行业黑话，并提供通俗易懂的解释。\n"
+            "标题要求：不要输出 BV 号、纯链接、纯文件名；如果提供了原始标题参考，请基于字幕内容提炼更好的标题。\n"
             "请严格以 JSON 格式输出，不要使用 Markdown 代码块；不要在字符串里插入未转义的换行/制表符；输出必须是可被标准 JSON 解析器解析的合法 JSON。\n"
             "格式如下：\n"
             "{\n"
@@ -365,6 +372,8 @@ class FastVideoAnalyzer:
 
         # 截断过长文本，防止 token 溢出 (视模型能力调整)
         user_input = transcript[:15000]
+        if source_title:
+            user_input += "\n\n[原始标题参考]\n" + source_title + "\n"
         if image_context:
              user_input += image_context
 

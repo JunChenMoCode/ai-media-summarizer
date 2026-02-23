@@ -68,6 +68,11 @@
       <div class="content-header">
         <div class="header-title">{{ currentFolderName }}</div>
         <div class="header-actions">
+           <a-select v-model="sortMode" class="sort-select">
+             <a-option value="title_nat">标题（自然）</a-option>
+             <a-option value="time_desc">时间（最新）</a-option>
+             <a-option value="time_asc">时间（最旧）</a-option>
+           </a-select>
            <a-button @click="refreshAssets">
              <template #icon><icon-refresh /></template>
              刷新
@@ -77,7 +82,7 @@
       
       <div class="assets-grid" v-if="assets.length">
         <div
-          v-for="item in assets"
+          v-for="item in sortedAssets"
           :key="item.md5"
           :id="'card-' + item.md5"
           class="card-sm"
@@ -214,12 +219,46 @@ const getItemTitle = (item) => decodeTitle(item?.content_json?.title || item?.di
 const folderTreeData = ref([])
 const flatFolders = ref([])
 const assets = ref([])
+const sortMode = ref('title_nat')
 const selectedFolderId = ref('all')
 const folderModalVisible = ref(false)
 const folderModalType = ref('create')
 const folderForm = ref({ name: '', parent_id: null, id: null })
 const dragOverId = ref(null)
 const draggedItem = ref(null)
+
+const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+const sortedAssets = computed(() => {
+  const list = Array.isArray(assets.value) ? [...assets.value] : []
+  const mode = String(sortMode.value || 'title_nat')
+  const getTitle = (it) => decodeTitle(it?.content_json?.title || it?.display_name || it?.md5 || '').trim()
+  const getTime = (it) => {
+    const v = it?.created_at
+    if (!v) return 0
+    if (typeof v === 'number') return v
+    const t = Date.parse(v)
+    return Number.isFinite(t) ? t : 0
+  }
+
+  list.sort((a, b) => {
+    if (mode === 'time_desc') {
+      return (getTime(b) - getTime(a)) || collator.compare(getTitle(a), getTitle(b))
+    }
+    if (mode === 'time_asc') {
+      return (getTime(a) - getTime(b)) || collator.compare(getTitle(a), getTitle(b))
+    }
+
+    const ta = getTitle(a)
+    const tb = getTitle(b)
+    if (!ta && !tb) return (getTime(b) - getTime(a)) || collator.compare(String(a?.md5 || ''), String(b?.md5 || ''))
+    if (!ta) return 1
+    if (!tb) return -1
+    const c = collator.compare(ta, tb)
+    return c || (getTime(b) - getTime(a)) || collator.compare(String(a?.md5 || ''), String(b?.md5 || ''))
+  })
+
+  return list
+})
 
 const currentFolderName = computed(() => {
   if (selectedFolderId.value === 'all') return '全部资源'
@@ -685,6 +724,16 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sort-select {
+  width: 160px;
 }
 
 .header-title {
