@@ -13,6 +13,37 @@
 - 🌍 双语字幕翻译与双字幕展示
 - 📚 课件截图与 OCR（支持 VL 模型远程 OCR 或本地 Tesseract）
 
+## 🖼️ 产品截图
+
+<p align="center">
+  <img src="public/04a1be78-ea8c-4394-bc67-a62734c240a3.png" width="320" />
+  <img src="public/0c2abf49-030a-438c-b3ef-f9b8c0677f2b.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/86dcbf59-369c-40f4-9540-8bc684574f88.png" width="320" />
+  <img src="public/8a602e9f-3a43-40e2-9520-8d00300e0349.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/8d9046c5-edd0-4a4a-82a7-f55e87d2da99.png" width="320" />
+  <img src="public/a199827e-c76b-4cfa-a59e-17e369b51ccf.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/a80cbe30-4fd4-482a-a9bd-728236d41b90.png" width="320" />
+  <img src="public/aadc48e4-52f9-4059-97ff-9a11dbc30da3.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/af44f169-13d7-4f39-b505-bb5cde6c01b4.png" width="320" />
+  <img src="public/ba541879-162c-4f19-a6c7-004ec42cf77e.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/bfe3949b-73dc-4722-afaa-293fbd1ecf31.png" width="320" />
+  <img src="public/c4d645fa-6f45-478c-a694-0afffb7d94e9.png" width="320" />
+</p>
+<p align="center">
+  <img src="public/d256fcfd-bdfb-4f7c-9212-9ae845dfaadf.png" width="320" />
+  <img src="public/efe727ed-545a-4fe6-b0e7-327fdbd30272.png" width="320" />
+</p>
+
 ## 🏗️ 架构概览
 
 - 后端入口：`main.py`（uvicorn 入口尽量保持精简）
