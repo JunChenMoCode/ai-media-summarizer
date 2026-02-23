@@ -38,27 +38,30 @@
             <icon-down v-if="!isLeaf" />
           </template>
           <template #title="node">
-             <div 
-               class="tree-node-title"
-               :class="{ 'drag-over': dragOverId === node.id }"
-               @dragover="onDragOver"
-               @dragenter.prevent="dragOverId = node.id"
-               @dragleave="onDragLeave(node.id, $event)"
-               @drop.stop="onDrop($event, node.id)"
-             >
-               <div style="display: flex; align-items: center; gap: 6px;">
-                 <icon-folder style="color: #ffb400; font-size: 16px;" />
-                 <span>{{ node.name }}</span>
-               </div>
-               <div class="tree-node-actions">
-                 <a-button type="text" size="mini" @click.stop="openEditFolderModal(node)">
-                   <icon-edit />
-                 </a-button>
-                 <a-button type="text" status="danger" size="mini" @click.stop="deleteFolder(node)">
-                   <icon-delete />
-                 </a-button>
-               </div>
-             </div>
+            <a-dropdown
+              trigger="contextMenu"
+              alignPoint
+              @select="(v) => handleFolderContext(v, node)"
+              :style="{ display: 'block' }"
+            >
+              <div 
+                class="tree-node-title"
+                :class="{ 'drag-over': dragOverId === node.id }"
+                @dragover="onDragOver"
+                @dragenter.prevent="dragOverId = node.id"
+                @dragleave="onDragLeave(node.id, $event)"
+                @drop.stop="onDrop($event, node.id)"
+              >
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <icon-folder style="color: #ffb400; font-size: 16px;" />
+                  <span>{{ node.name }}</span>
+                </div>
+              </div>
+              <template #content>
+                <a-doption value="edit">编辑</a-doption>
+                <a-doption value="delete">删除</a-doption>
+              </template>
+            </a-dropdown>
           </template>
         </a-tree>
       </div>
@@ -345,6 +348,18 @@ const openEditFolderModal = (node) => {
   folderModalType.value = 'edit'
   folderForm.value = { name: node.name, parent_id: null, id: node.id } // Parent ID handling is tricky with tree select recursion, simplified for now
   folderModalVisible.value = true
+}
+
+const handleFolderContext = (action, node) => {
+  const v = String(action || '').trim()
+  if (!v) return
+  if (v === 'edit') {
+    openEditFolderModal(node)
+    return
+  }
+  if (v === 'delete') {
+    deleteFolder(node)
+  }
 }
 
 const handleFolderSubmit = async () => {
@@ -700,15 +715,6 @@ onMounted(() => {
   align-items: center;
   width: 100%;
   height: 100%;
-  padding-right: 8px; /* Give some space for actions */
-}
-
-.tree-node-actions {
-  display: none;
-}
-
-.tree-node-title:hover .tree-node-actions {
-  display: flex;
 }
 
 .category-content {

@@ -95,13 +95,13 @@ def get_all_tasks():
 def get_task(task_id: str):
     return tasks.get(task_id)
 
-def add_task(url: str, task_type: str = "video", config: Optional[Dict] = None):
+def add_task(url: str, task_type: str = "video", config: Optional[Dict] = None, created_at: float = 0.0):
     task_id = str(uuid.uuid4())
     task = Task(
         id=task_id,
         url=url,
         type=task_type,
-        created_at=time.time(),
+        created_at=created_at if created_at and created_at > 0 else time.time(),
         status=TaskStatus.PENDING,
         config=config,
     )

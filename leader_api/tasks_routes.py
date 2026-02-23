@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import json
-from .task_store import add_task, get_all_tasks, cancel_task, delete_task, Task
-from .mysql_store import save_app_config
+from .task_store import add_task, get_task, get_all_tasks, cancel_task, delete_task, Task
+from .mysql_store import save_app_config, mysql_enabled, db_get_task
 
 router = APIRouter()
 
@@ -115,3 +115,30 @@ def remove_task(task_id: str):
     if delete_task(task_id):
         return {"status": "deleted"}
     raise HTTPException(status_code=404, detail="Task not found")
+
+@router.post("/{task_id}/retry")
+def retry_task(task_id: str):
+    try:
+        task = get_task(task_id)
+        if not task and mysql_enabled():
+            task_data = db_get_task(task_id)
+            if task_data:
+                task = Task(**task_data)
+
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if str(task.status) != "failed":
+            raise HTTPException(status_code=400, detail="Only failed tasks can be retried")
+
+        new_task = add_task(
+            url=task.url,
+            task_type=task.type,
+            config=task.config,
+            created_at=task.created_at,
+        )
+        return {"status": "queued", "task_id": new_task.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

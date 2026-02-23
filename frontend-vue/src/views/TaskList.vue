@@ -92,6 +92,14 @@
                   查看
                 </a-button>
                 <a-button 
+                  v-if="record.status === 'failed'" 
+                  type="text" 
+                  size="small" 
+                  @click="retryTask(record)"
+                >
+                  重试
+                </a-button>
+                <a-button 
                   type="text" 
                   size="small" 
                   status="danger" 
@@ -375,6 +383,23 @@ const deleteTask = async (record) => {
       }
     }
   })
+}
+
+const retryTask = async (record) => {
+  try {
+    const res = await fetch(`${backendBaseUrl.value}/tasks/${record.id}/retry`, {
+      method: 'POST'
+    })
+    if (res.ok) {
+      Message.success('已重新加入队列')
+      fetchTasks()
+    } else {
+      const data = await res.json().catch(() => ({}))
+      Message.error(data.detail || '重试失败')
+    }
+  } catch (e) {
+    Message.error('重试失败')
+  }
 }
 
 const viewResult = (record) => {
